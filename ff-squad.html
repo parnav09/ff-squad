@@ -55,13 +55,17 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '0.1 (Phase B)';
+const VERSION = '0.2 (Phase B)';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
 const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
+// Read the reset-link result from the URL before Supabase clears it
+const URLP = new URLSearchParams(location.hash.slice(1));
+const LINK_ERR = URLP.get('error_description') || URLP.get('error') || '';
+const LINK_RECOVERY = URLP.get('type') === 'recovery';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const bad = m => { throw {user:1, message:m}; };
@@ -185,7 +189,7 @@ function settingsHTML(){
 async function load(){
   try{
     const {data:{session}} = await sb.auth.getSession();
-    if (!session){ S.uid = null; S.me = S.team = null; unsub(); return authView(); }
+    if (!session){ S.uid = null; S.me = S.team = null; unsub(); authView(); if (S.linkMsg){ say(app.querySelector('form'), 'er', S.linkMsg); S.linkMsg = ''; } return; }
     S.uid = session.user.id; S.email = session.user.email;
     if (S.recovery) return recoverView();
     const [p, m] = await Promise.all([
@@ -285,14 +289,18 @@ async function boot(){
   if (!CONFIG.SUPABASE_URL.includes('.supabase.co') || CONFIG.SUPABASE_ANON_KEY.length < 20)
     return setupView('Backend Not Configured', 'Open the file, find CONFIG near the top of the script, and paste your Supabase URL and publishable key.');
   if (!window.supabase) return setupView('Could not load Supabase', 'Check your internet connection and reload the page.');
-  sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
-  const {data:{session}} = await sb.auth.getSession();
-  S.uid = session ? session.user.id : null;
+  sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {auth:{flowType:'implicit'}});
+  S.recovery = LINK_RECOVERY;
+  if (LINK_ERR){ S.linkMsg = 'This reset link is invalid or has expired. Tap "Forgot password?", send a new link and open only the newest email.'; history.replaceState(null, '', location.pathname); }
+  // listener is registered BEFORE any await, so the PASSWORD_RECOVERY event is never missed
   sb.auth.onAuthStateChange((ev, ses) => {
+    if (ev === 'INITIAL_SESSION') return;
     if (ev === 'PASSWORD_RECOVERY'){ S.recovery = true; return recoverView(); }
     const id = ses && ses.user ? ses.user.id : null;
     if (ev === 'SIGNED_OUT' || id !== S.uid){ S.uid = id; setTimeout(load, 0); }
   });
+  const {data:{session}} = await sb.auth.getSession();
+  S.uid = session ? session.user.id : null;
   window.addEventListener('offline', () => setSync('off'));
   window.addEventListener('online', load);
   load();
