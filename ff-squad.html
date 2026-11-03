@@ -55,12 +55,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '0.2 (Phase B)';
+const VERSION = '0.3 (Phase C1a)';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL'};
+const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
+const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -137,20 +139,23 @@ function errorView(){
 }
 function mainView(){
   const v = S.view, nm = S.names[S.uid] ? S.names[S.uid].display_name : '';
-  const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : homeHTML();
-  const tabs = [['home','Home','🏠'],['team','Team','👥'],['settings','Settings','⚙️']];
+  const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : v === 'score' ? scoreHTML() : homeHTML();
+  const tabs = [['home','Home','🏠'],['score','Score','📝'],['team','Team','👥'],['settings','Settings','⚙️']];
   app.innerHTML = `<header><div><b>${esc(S.team.team_name)}</b><small>${esc(nm)} · ${esc(S.me.membership_role)}</small></div>${pill()}</header>
   <main>${body}</main><nav>${tabs.map(([k,l,i]) => `<button data-nav="${k}" class="${k === v ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('')}</nav>`;
+  if (v === 'score') prefillScore();
 }
 function homeHTML(){
-  const ov = ['Team Daily Score','Team Evaluation','Drill Completion','Scrim Performance']
-    .map(t => `<div class="card ov"><small>${t}</small><b>No Data Available</b></div>`).join('');
+  const td = teamDay();
+  const ov = [['Team Daily Score', td ? td.avg.toFixed(1) + ' / 50 · ' + td.n + '/4 players · ' + fmt(td.date) : 'No Data Available'],
+    ['Team Evaluation','No Data Available'],['Drill Completion','No Data Available'],['Scrim Performance','No Data Available']]
+    .map(([t, v]) => `<div class="card ov"><small>${t}</small><b>${v}</b></div>`).join('');
   const cards = [1,2,3,4].map(n => {
     const m = S.members.find(x => x.player_number === n && x.status === 'active');
     const p = m && S.names[m.user_id], name = p ? p.display_name : 'Player';
     return `<div class="card pl"><div class="av">${m ? esc(name[0].toUpperCase()) : 'P' + n}</div>
     <div class="fl"><b>P${n} — ${ROLES[n]}</b><span>${m ? esc(name) : 'Player Not Connected'}</span>
-    <small>${m ? 'Connected' : 'Waiting to join'} · No score yet</small></div></div>`;
+    <small>${m ? 'Connected · ' + scoreLine(m.user_id) : 'Waiting to join · No score yet'}</small></div></div>`;
   }).join('');
   const act = [{d:S.team.created_at, t:'Team created'}].concat(
     S.members.filter(m => m.user_id !== S.team.owner_id).map(m => ({d:m.joined_at,
@@ -204,7 +209,10 @@ async function load(){
       run(sb.from('teams').select('*').eq('id', tid).single()),
       run(sb.from('team_members').select('*').eq('team_id', tid).order('joined_at'))]);
     const pr = await run(sb.from('profiles').select('id,display_name,avatar_url').in('id', [...new Set(ms.map(x => x.user_id))]));
+    const since = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+    S.scores = await run(sb.from('daily_scores').select('*').eq('team_id', tid).gte('score_date', since).order('score_date', {ascending:false}));
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
+    if (S.view === 'score' && S.dirty) return;   // do not wipe a half-filled form
     mainView();
   }catch(e){ console.error(e); errorView(); }
 }
@@ -221,6 +229,7 @@ function subscribe(){
   if (S.me && S.me.status === 'active'){
     ch.on('postgres_changes', {event:'*', schema:'public', table:'team_members', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'UPDATE', schema:'public', table:'profiles'}, refreshSoon);
+    ch.on('postgres_changes', {event:'*', schema:'public', table:'daily_scores', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
   }
   S.ch = ch;
   ch.subscribe(st => { if (S.ch !== ch) return; setSync(st === 'SUBSCRIBED' ? 'ok' : st === 'CLOSED' ? 'off' : 'err'); });
@@ -262,6 +271,18 @@ const H = {
     await run(sb.rpc('join_team', {p_code:d.code}));
     await load();
   },
+  async saveScore(d){
+    if (!d.player) bad('Choose a player.');
+    if (!d.date || d.date > today()) bad('Choose a valid date (not in the future).');
+    const vals = {}; let filled = 0;
+    CATS.forEach(k => { if (d[k] !== '') { vals[k] = Number(d[k]); filled++; } else vals[k] = null; });
+    if (!filled) bad('Fill at least one category.');
+    const row = Object.assign({team_id:S.team.id, score_date:d.date, player_id:d.player, evaluator_id:S.uid,
+      notes:d.notes.trim() || null, improvement_target:d.goal.trim() || null}, vals);
+    await run(sb.from('daily_scores').upsert(row, {onConflict:'team_id,score_date,player_id,evaluator_id'}));
+    S.dirty = false; S.flash = filled === 5 ? 'Rating saved ✓' : 'Saved as Incomplete (' + filled + ' of 5 filled)';
+    await load();
+  },
   async assign(d){
     await run(sb.rpc('assign_member', {p_member:d.id, p_player:Number(d.slot), p_activate:true}));
     await load();
@@ -279,9 +300,66 @@ document.addEventListener('submit', async e => {
 document.addEventListener('click', async e => {
   const t = e.target.closest('[data-go],[data-nav],[data-act]'); if (!t) return;
   if (t.dataset.go) return authView(t.dataset.go);
-  if (t.dataset.nav){ S.view = t.dataset.nav; return mainView(); }
+  if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
   if (t.dataset.act === 'logout'){ unsub(); try{ await sb.auth.signOut(); }catch(err){ console.error(err); } load(); }
+});
+
+// ---------- daily scores (missing = never 0; self-ratings are not counted) ----------
+const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+function dayStats(pid){   // newest first: {date, n, avg} from OTHER people's complete ratings
+  const by = {};
+  S.scores.filter(r => r.player_id === pid && r.evaluator_id !== pid && r.total != null)
+    .forEach(r => { (by[r.score_date] = by[r.score_date] || []).push(r.total); });
+  return Object.keys(by).sort().reverse().map(d => ({date:d, n:by[d].length, avg:by[d].reduce((a, b) => a + b, 0) / by[d].length}));
+}
+function scoreLine(pid){
+  const s = dayStats(pid); if (!s.length) return 'No score yet';
+  const c = s[0], d = s[1] ? c.avg - s[1].avg : null;
+  return c.avg.toFixed(1) + '/50 · ' + c.n + ' rating' + (c.n > 1 ? 's' : '') + (d === null ? '' : ' · ' + (d >= 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1));
+}
+function teamDay(){
+  const per = S.members.filter(m => m.status === 'active' && m.player_number).map(m => dayStats(m.user_id)[0]).filter(Boolean);
+  if (!per.length) return null;
+  const date = per.map(x => x.date).sort().reverse()[0], same = per.filter(x => x.date === date);
+  return {date, n:same.length, avg:same.reduce((a, x) => a + x.avg, 0) / same.length};
+}
+function scoreHTML(){
+  const fl = S.flash || ''; S.flash = '';
+  const nm = id => (S.names[id] || {}).display_name || 'Player';
+  const slots = S.members.filter(m => m.status === 'active' && m.player_number).sort((a, b) => a.player_number - b.player_number);
+  const opts = '<option value="">—</option>' + Array.from({length:11}, (_, i) => `<option value="${i}">${i}</option>`).join('');
+  const list = S.scores.slice(0, 10).map(r => {
+    const pl = S.members.find(m => m.user_id === r.player_id);
+    return `<li><span>${fmt(r.score_date)} · P${pl ? pl.player_number : '?'} ${esc(nm(r.player_id))}<br><small>by ${esc(nm(r.evaluator_id))}${r.evaluator_id === r.player_id ? ' (self)' : ''}</small></span><small>${r.total != null ? r.total + '/50' : 'Incomplete'}</small></li>`;
+  }).join('');
+  return `<h2>Daily Score</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}
+  <div class="card"><form data-f="saveScore" novalidate>
+  <label>Date<input type="date" name="date" value="${today()}" max="${today()}"></label>
+  <label>Player<select name="player">${slots.map(m => `<option value="${m.user_id}">P${m.player_number} · ${esc(nm(m.user_id))}</option>`).join('')}</select></label>
+  ${CATS.map(k => `<label>${CAT_LBL[k]} (0–10)<select name="${k}">${opts}</select></label>`).join('')}
+  <label>Notes (optional)<input name="notes" maxlength="500"></label>
+  <label>Improvement target (optional)<input name="goal" maxlength="200"></label>
+  <p id="sc-total" class="mut" style="margin-bottom:10px">Incomplete: 0 of 5 filled</p>
+  <div class="msg" role="alert"></div><button class="btn">Save Rating</button></form></div>
+  <h2>Recent Ratings</h2><div class="card"><ul>${list || '<li><span class="mut">No ratings yet.</span></li>'}</ul></div>`;
+}
+function scoreTotal(f){
+  const v = CATS.map(k => f[k].value), n = v.filter(x => x !== '').length;
+  const t = v.reduce((a, x) => a + (x === '' ? 0 : +x), 0);
+  document.getElementById('sc-total').textContent = n === 5 ? 'Total: ' + t + ' / 50 (' + (t * 2) + '%)' : 'Incomplete: ' + n + ' of 5 filled';
+}
+function prefillScore(){   // load my existing rating for this date + player, if any
+  const f = document.querySelector('form[data-f="saveScore"]'); if (!f || !f.player.value) return;
+  const r = S.scores.find(x => x.evaluator_id === S.uid && x.score_date === f.date.value && x.player_id === f.player.value);
+  CATS.forEach(k => { f[k].value = r && r[k] != null ? r[k] : ''; });
+  f.notes.value = (r && r.notes) || ''; f.goal.value = (r && r.improvement_target) || '';
+  scoreTotal(f);
+}
+document.addEventListener('input', e => { if (e.target.closest('form[data-f="saveScore"]')) S.dirty = true; });
+document.addEventListener('change', e => {
+  const f = e.target.closest('form[data-f="saveScore"]'); if (!f) return;
+  if (e.target.name === 'date' || e.target.name === 'player') prefillScore(); else scoreTotal(f);
 });
 
 // ---------- start ----------
