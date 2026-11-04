@@ -43,6 +43,12 @@ ul{list-style:none}li{display:flex;justify-content:space-between;gap:8px;padding
 nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:rgba(8,11,23,.92);backdrop-filter:blur(14px);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;min-height:56px;background:none;border:0;color:var(--tx2);font:12px system-ui}
 nav button span{display:block;font-size:20px}nav button.on{color:var(--cy)}
+.chip{display:inline-block;margin:0 0 14px;padding:8px 12px;border:1px solid var(--bd);border-radius:99px;background:rgba(66,232,255,.07);color:var(--cy)}
+.chip small{color:var(--tx2)}
+.tgt{display:block;margin-top:8px;padding:6px 10px;border-radius:10px;background:rgba(155,108,255,.14);font-size:13px;overflow-wrap:anywhere}
+li small.note{white-space:normal}h2 small{font-size:12px;font-weight:400}
+li.lg{align-items:flex-start}
+.note{display:block;margin-top:6px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04);border-left:2px solid var(--vi);color:var(--tx);font-size:14px;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -55,14 +61,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '0.3 (Phase C1a)';
-const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL'};
+const VERSION = '0.4 (Phase C1b)';
+const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -147,15 +153,15 @@ function mainView(){
 }
 function homeHTML(){
   const td = teamDay();
-  const ov = [['Team Daily Score', td ? td.avg.toFixed(1) + ' / 50 · ' + td.n + '/4 players · ' + fmt(td.date) : 'No Data Available'],
+  const ov = [['Team Daily Score', td ? td.avg.toFixed(1) + ' / 50 · ' + td.n + '/4 players · ' + fmtDay(td.date) : 'No Data Available'],
     ['Team Evaluation','No Data Available'],['Drill Completion','No Data Available'],['Scrim Performance','No Data Available']]
     .map(([t, v]) => `<div class="card ov"><small>${t}</small><b>${v}</b></div>`).join('');
-  const cards = [1,2,3,4].map(n => {
+  const cards = [1,2,3,4].concat(S.settings.fifth_player === true ? [5] : []).map(n => {
     const m = S.members.find(x => x.player_number === n && x.status === 'active');
     const p = m && S.names[m.user_id], name = p ? p.display_name : 'Player';
     return `<div class="card pl"><div class="av">${m ? esc(name[0].toUpperCase()) : 'P' + n}</div>
     <div class="fl"><b>P${n} — ${ROLES[n]}</b><span>${m ? esc(name) : 'Player Not Connected'}</span>
-    <small>${m ? 'Connected · ' + scoreLine(m.user_id) : 'Waiting to join · No score yet'}</small></div></div>`;
+    <small>${m ? 'Connected · ' + scoreLine(m.user_id) : 'Waiting to join · No score yet'}</small>${m ? tgtChip(m.user_id) : ''}</div></div>`;
   }).join('');
   const act = [{d:S.team.created_at, t:'Team created'}].concat(
     S.members.filter(m => m.user_id !== S.team.owner_id).map(m => ({d:m.joined_at,
@@ -166,8 +172,9 @@ function homeHTML(){
   <h2>Recent Activity</h2><div class="card"><ul>${act}</ul></div>`;
 }
 function teamHTML(){
+  const fifth = S.settings.fifth_player === true;
   const used = new Set(S.members.filter(m => m.player_number).map(m => m.player_number));
-  const free = [1,2,3,4].filter(n => !used.has(n));
+  const free = [1,2,3,4].concat(fifth ? [5] : []).filter(n => !used.has(n));
   const nameOf = m => esc((S.names[m.user_id] || {}).display_name || 'Player');
   const row = m => `<form class="row" data-f="assign"><input type="hidden" name="id" value="${m.id}">
     <div class="fl"><b>${nameOf(m)}</b><small>${m.status === 'active' ? 'Active · no slot yet' : 'Waiting for approval'}</small></div>
@@ -176,8 +183,11 @@ function teamHTML(){
   const todo = S.members.filter(m => m.status !== 'active' || !m.player_number);
   const roster = S.members.filter(m => m.status === 'active').map(m =>
     `<li><span>${nameOf(m)}</span><small>${m.player_number ? 'P' + m.player_number + ' · ' + ROLES[m.player_number] : 'No slot'}</small></li>`).join('');
+  const sub = fifth
+    ? `<div class="card"><h3>Fifth player · Substitute (P5)</h3><p class="mut" style="margin-bottom:10px">P5 is ON. Ask the player to sign up and join with the code above. They appear in "Waiting for you" and the P5 slot is picked automatically.</p>${used.has(5) ? '' : '<button class="btn ghost" data-act="fifth-off">Turn off P5</button>'}</div>`
+    : `<div class="card"><h3>Fifth player (optional)</h3><p class="mut" style="margin-bottom:10px">One substitute (P5) for days when a main player is unavailable. Maximum 5 players.</p><button class="btn" data-act="fifth-on">+ Add fifth player</button></div>`;
   const own = isOwner() ? `<div class="card"><small>Join code — share only with your players</small><div class="code">${esc(S.team.invite_code)}</div></div>
-    <div class="card"><h3>Waiting for you</h3>${todo.length ? todo.map(row).join('') : '<p class="mut">No one is waiting.</p>'}</div>` : '';
+    ${todo.length ? `<div class="card"><h3>Waiting for you</h3>${todo.map(row).join('')}</div>` : ''}${sub}` : '';
   return `<h2>Team</h2>${own}<div class="card"><h3>Roster</h3><ul>${roster}</ul></div>`;
 }
 function settingsHTML(){
@@ -211,6 +221,15 @@ async function load(){
     const pr = await run(sb.from('profiles').select('id,display_name,avatar_url').in('id', [...new Set(ms.map(x => x.user_id))]));
     const since = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
     S.scores = await run(sb.from('daily_scores').select('*').eq('team_id', tid).gte('score_date', since).order('score_date', {ascending:false}));
+    const [sm, fb, st] = await Promise.all([
+      run(sb.rpc('daily_summary', {p_team:tid, p_since:since})),
+      run(sb.rpc('my_feedback', {p_team:tid, p_since:since})),
+      run(sb.from('team_settings').select('*').eq('team_id', tid))]);
+    const seen = {};
+    S.ov = {days: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date)).map(r => ({player_id:r.player_id, score_date:r.score_date, n:r.n, avg:r.avg_total})),
+      targets: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date))
+        .filter(r => r.goal && !seen[r.player_id] && (seen[r.player_id] = 1)).map(r => ({player_id:r.player_id, target:r.goal}))};
+    S.feedback = fb; S.settings = Object.fromEntries(st.map(x => [x.setting_key, x.setting_value]));
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
     if (S.view === 'score' && S.dirty) return;   // do not wipe a half-filled form
     mainView();
@@ -230,6 +249,8 @@ function subscribe(){
     ch.on('postgres_changes', {event:'*', schema:'public', table:'team_members', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'UPDATE', schema:'public', table:'profiles'}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'daily_scores', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
+    ch.on('postgres_changes', {event:'*', schema:'public', table:'team_settings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
+    ch.on('postgres_changes', {event:'*', schema:'public', table:'score_pings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
   }
   S.ch = ch;
   ch.subscribe(st => { if (S.ch !== ch) return; setSync(st === 'SUBSCRIBED' ? 'ok' : st === 'CLOSED' ? 'off' : 'err'); });
@@ -302,16 +323,22 @@ document.addEventListener('click', async e => {
   if (t.dataset.go) return authView(t.dataset.go);
   if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
+  if (t.dataset.act === 'fifth-on' || t.dataset.act === 'fifth-off'){
+    try{
+      await run(sb.from('team_settings').upsert({team_id:S.team.id, setting_key:'fifth_player', setting_value:t.dataset.act === 'fifth-on'}, {onConflict:'team_id,setting_key'}));
+      await load();
+    }catch(err){ console.error(err); alert(friendly(err)); }
+    return;
+  }
   if (t.dataset.act === 'logout'){ unsub(); try{ await sb.auth.signOut(); }catch(err){ console.error(err); } load(); }
 });
 
 // ---------- daily scores (missing = never 0; self-ratings are not counted) ----------
-const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
-function dayStats(pid){   // newest first: {date, n, avg} from OTHER people's complete ratings
-  const by = {};
-  S.scores.filter(r => r.player_id === pid && r.evaluator_id !== pid && r.total != null)
-    .forEach(r => { (by[r.score_date] = by[r.score_date] || []).push(r.total); });
-  return Object.keys(by).sort().reverse().map(d => ({date:d, n:by[d].length, avg:by[d].reduce((a, b) => a + b, 0) / by[d].length}));
+const today = () => { try { return new Date().toLocaleDateString('en-CA', {timeZone: (S.team && S.team.timezone) || undefined}); } catch (e) { return new Date().toLocaleDateString('en-CA'); } };
+const fmtDay = d => new Date(d + 'T00:00:00Z').toLocaleDateString(undefined, {day:'numeric', month:'short', timeZone:'UTC'});
+const tgtChip = pid => { const t = ((S.ov && S.ov.targets) || []).find(x => x.player_id === pid); return t ? '<span class="tgt">🎯 ' + esc(t.target) + '</span>' : ''; };
+function dayStats(pid){   // newest first: {date, n, avg} — anonymous averages computed by the database
+  return ((S.ov && S.ov.days) || []).filter(d => d.player_id === pid).map(d => ({date:d.score_date, n:d.n, avg:Number(d.avg)}));
 }
 function scoreLine(pid){
   const s = dayStats(pid); if (!s.length) return 'No score yet';
@@ -329,20 +356,21 @@ function scoreHTML(){
   const nm = id => (S.names[id] || {}).display_name || 'Player';
   const slots = S.members.filter(m => m.status === 'active' && m.player_number).sort((a, b) => a.player_number - b.player_number);
   const opts = '<option value="">—</option>' + Array.from({length:11}, (_, i) => `<option value="${i}">${i}</option>`).join('');
-  const list = S.scores.slice(0, 10).map(r => {
-    const pl = S.members.find(m => m.user_id === r.player_id);
-    return `<li><span>${fmt(r.score_date)} · P${pl ? pl.player_number : '?'} ${esc(nm(r.player_id))}<br><small>by ${esc(nm(r.evaluator_id))}${r.evaluator_id === r.player_id ? ' (self)' : ''}</small></span><small>${r.total != null ? r.total + '/50' : 'Incomplete'}</small></li>`;
-  }).join('');
+  const tag = r => { const pl = S.members.find(m => m.user_id === r.player_id); return 'P' + (pl ? pl.player_number : '?') + ' ' + esc(nm(r.player_id)); };
+  const log = S.scores.slice(0, 15).map(r => `<li class="lg"><div class="fl"><b>${tag(r)}</b><small>${fmtDay(r.score_date)} · by ${esc(nm(r.evaluator_id))}${r.evaluator_id === r.player_id ? ' (self)' : ''}</small>${r.notes ? `<span class="note">“${esc(r.notes)}”</span>` : ''}${r.improvement_target ? `<span class="note">🎯 ${esc(r.improvement_target)}</span>` : ''}</div><small>${r.total != null ? r.total + '/50' : 'Incomplete'}</small></li>`).join('');
+  const fb = S.feedback.map(x => `<li class="lg"><div class="fl"><small>${fmtDay(x.score_date)}</small>${x.note ? `<span class="note">“${esc(x.note)}”</span>` : ''}${x.goal ? `<span class="note">🎯 ${esc(x.goal)}</span>` : ''}</div></li>`).join('');
   return `<h2>Daily Score</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}
   <div class="card"><form data-f="saveScore" novalidate>
-  <label>Date<input type="date" name="date" value="${today()}" max="${today()}"></label>
+  <input type="hidden" name="date" value="${today()}"><p class="mut" style="margin-bottom:12px">📅 Today · ${fmtDay(today())} <small>(date is automatic)</small></p>
   <label>Player<select name="player">${slots.map(m => `<option value="${m.user_id}">P${m.player_number} · ${esc(nm(m.user_id))}</option>`).join('')}</select></label>
   ${CATS.map(k => `<label>${CAT_LBL[k]} (0–10)<select name="${k}">${opts}</select></label>`).join('')}
-  <label>Notes (optional)<input name="notes" maxlength="500"></label>
+  <label>Note for the player (optional)<input name="notes" maxlength="500"></label>
   <label>Improvement target (optional)<input name="goal" maxlength="200"></label>
+  <p class="mut" style="font-size:13px;margin-bottom:10px">The player sees your note without your name. Only the owner sees who wrote it.</p>
   <p id="sc-total" class="mut" style="margin-bottom:10px">Incomplete: 0 of 5 filled</p>
   <div class="msg" role="alert"></div><button class="btn">Save Rating</button></form></div>
-  <h2>Recent Ratings</h2><div class="card"><ul>${list || '<li><span class="mut">No ratings yet.</span></li>'}</ul></div>`;
+  <h2>Feedback for you</h2><div class="card"><ul>${fb || '<li class="lg"><span class="mut">No feedback yet.</span></li>'}</ul></div>
+  ${isOwner() ? `<h2>All Ratings <small>(owner only)</small></h2><div class="card"><ul>${log || '<li class="lg"><span class="mut">No ratings yet.</span></li>'}</ul></div>` : '<p class="mut" style="font-size:13px">🔒 Who rated whom is private. Only the owner can see it.</p>'}`;
 }
 function scoreTotal(f){
   const v = CATS.map(k => f[k].value), n = v.filter(x => x !== '').length;
