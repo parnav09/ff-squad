@@ -49,6 +49,11 @@ nav button span{display:block;font-size:20px}nav button.on{color:var(--cy)}
 li small.note{white-space:normal}h2 small{font-size:12px;font-weight:400}
 li.lg{align-items:flex-start}
 .note{display:block;margin-top:6px;padding:8px 10px;border-radius:10px;background:rgba(255,255,255,.04);border-left:2px solid var(--vi);color:var(--tx);font-size:14px;overflow-wrap:anywhere}
+.tg{display:flex;align-items:center;gap:12px}
+.sw{flex:none;width:56px;height:34px;border-radius:99px;border:1px solid var(--bd);background:var(--bg2);position:relative;cursor:pointer}
+.sw::after{content:"";position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:var(--tx2);transition:transform .2s}
+.sw.on{background:linear-gradient(90deg,var(--cy),var(--bl));border-color:transparent}
+.sw.on::after{transform:translateX(22px);background:#05060B}
 </style>
 </head>
 <body>
@@ -61,14 +66,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '0.4 (Phase C1b)';
+const VERSION = '0.4.1 (Phase C1b)';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -80,6 +85,7 @@ const bad = m => { throw {user:1, message:m}; };
 const run = async p => { const r = await p; if (r.error) throw r.error; return r.data; };
 const fmt = d => new Date(d).toLocaleDateString(undefined, {day:'numeric', month:'short'});
 const isOwner = () => !!S.me && S.me.membership_role === 'owner';
+const cmdOn = () => isOwner() && S.cmd;   // owner tools only appear when Command Mode is ON
 const say = (f, t, m) => { const e = f && f.querySelector('.msg'); if (e) { e.className = 'msg ' + t; e.textContent = m; } };
 const pill = () => `<span id="sync" class="pill ${S.sync}">${LBL[S.sync]}</span>`;
 function setSync(v){ S.sync = v; const e = document.getElementById('sync'); if (e) e.outerHTML = pill(); }
@@ -146,8 +152,8 @@ function errorView(){
 function mainView(){
   const v = S.view, nm = S.names[S.uid] ? S.names[S.uid].display_name : '';
   const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : v === 'score' ? scoreHTML() : homeHTML();
-  const tabs = [['home','Home','🏠'],['score','Score','📝'],['team','Team','👥'],['settings','Settings','⚙️']];
-  app.innerHTML = `<header><div><b>${esc(S.team.team_name)}</b><small>${esc(nm)} · ${esc(S.me.membership_role)}</small></div>${pill()}</header>
+  const tabs = [['home','Home','🏠'],['score','Score','📝'],['team','Team','👥'],['settings','Settings' + (cmdOn() && missingFor(prevDay(today())).some(x => x.done < x.need) ? ' 🔴' : ''),'⚙️']];
+  app.innerHTML = `<header><div><b>${esc(S.team.team_name)}</b><small>${esc(nm)} · ${isOwner() ? (S.cmd ? 'owner ⚡' : 'player') : esc(S.me.membership_role)}</small></div>${pill()}</header>
   <main>${body}</main><nav>${tabs.map(([k,l,i]) => `<button data-nav="${k}" class="${k === v ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('')}</nav>`;
   if (v === 'score') prefillScore();
 }
@@ -186,14 +192,15 @@ function teamHTML(){
   const sub = fifth
     ? `<div class="card"><h3>Fifth player · Substitute (P5)</h3><p class="mut" style="margin-bottom:10px">P5 is ON. Ask the player to sign up and join with the code above. They appear in "Waiting for you" and the P5 slot is picked automatically.</p>${used.has(5) ? '' : '<button class="btn ghost" data-act="fifth-off">Turn off P5</button>'}</div>`
     : `<div class="card"><h3>Fifth player (optional)</h3><p class="mut" style="margin-bottom:10px">One substitute (P5) for days when a main player is unavailable. Maximum 5 players.</p><button class="btn" data-act="fifth-on">+ Add fifth player</button></div>`;
-  const own = isOwner() ? `<div class="card"><small>Join code — share only with your players</small><div class="code">${esc(S.team.invite_code)}</div></div>
+  const own = cmdOn() ? `<div class="card"><small>Join code — share only with your players</small><div class="code">${esc(S.team.invite_code)}</div></div>
     ${todo.length ? `<div class="card"><h3>Waiting for you</h3>${todo.map(row).join('')}</div>` : ''}${sub}` : '';
   return `<h2>Team</h2>${own}<div class="card"><h3>Roster</h3><ul>${roster}</ul></div>`;
 }
 function settingsHTML(){
   const p = S.names[S.uid] || {};
-  return `<h2>Settings</h2>
-  <div class="card"><h3>Profile</h3><p>${esc(p.display_name || '')}</p><small>${esc(S.me.membership_role)}${S.me.player_number ? ' · P' + S.me.player_number + ' ' + ROLES[S.me.player_number] : ''}</small></div>
+  const cmd = isOwner() ? `<div class="card"><div class="tg"><div class="fl"><b>⚡ Command Mode</b><small>Owner tools: join code, approvals, fifth player, all ratings, daily check. OFF = you use the app like a normal player.</small></div><button class="sw ${S.cmd ? 'on' : ''}" data-act="cmd" aria-label="Command Mode"></button></div></div>` : '';
+  return `<h2>Settings</h2>${cmd}${cmdOn() ? checkHTML() : ''}
+  <div class="card"><h3>Profile</h3><p>${esc(p.display_name || '')}</p><small>${isOwner() && !S.cmd ? 'player' : esc(S.me.membership_role)}${S.me.player_number ? ' · P' + S.me.player_number + ' ' + ROLES[S.me.player_number] : ''}</small></div>
   <div class="card"><h3>Team</h3><p>${esc(S.team.team_name)}</p><small>${esc(S.team.team_description || 'No description')} · ${esc(S.team.timezone)}</small></div>
   <div class="card"><h3>Account</h3><small>${esc(S.email || '')}</small></div>
   <div class="card"><h3>Status</h3><small>Backend: configured · Realtime: ${LBL[S.sync]} · App version ${VERSION}</small></div>
@@ -233,6 +240,7 @@ async function load(){
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
     if (S.view === 'score' && S.dirty) return;   // do not wipe a half-filled form
     mainView();
+    purgeOld();
   }catch(e){ console.error(e); errorView(); }
 }
 
@@ -323,6 +331,10 @@ document.addEventListener('click', async e => {
   if (t.dataset.go) return authView(t.dataset.go);
   if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
+  if (t.dataset.act === 'cmd'){
+    S.cmd = !S.cmd; try{ localStorage.setItem('ff_cmd', S.cmd ? '1' : '0'); }catch(err){}
+    mainView(); purgeOld(); return;
+  }
   if (t.dataset.act === 'fifth-on' || t.dataset.act === 'fifth-off'){
     try{
       await run(sb.from('team_settings').upsert({team_id:S.team.id, setting_key:'fifth_player', setting_value:t.dataset.act === 'fifth-on'}, {onConflict:'team_id,setting_key'}));
@@ -357,8 +369,12 @@ function scoreHTML(){
   const slots = S.members.filter(m => m.status === 'active' && m.player_number).sort((a, b) => a.player_number - b.player_number);
   const opts = '<option value="">—</option>' + Array.from({length:11}, (_, i) => `<option value="${i}">${i}</option>`).join('');
   const tag = r => { const pl = S.members.find(m => m.user_id === r.player_id); return 'P' + (pl ? pl.player_number : '?') + ' ' + esc(nm(r.player_id)); };
-  const log = S.scores.slice(0, 15).map(r => `<li class="lg"><div class="fl"><b>${tag(r)}</b><small>${fmtDay(r.score_date)} · by ${esc(nm(r.evaluator_id))}${r.evaluator_id === r.player_id ? ' (self)' : ''}</small>${r.notes ? `<span class="note">“${esc(r.notes)}”</span>` : ''}${r.improvement_target ? `<span class="note">🎯 ${esc(r.improvement_target)}</span>` : ''}</div><small>${r.total != null ? r.total + '/50' : 'Incomplete'}</small></li>`).join('');
-  const fb = S.feedback.map(x => `<li class="lg"><div class="fl"><small>${fmtDay(x.score_date)}</small>${x.note ? `<span class="note">“${esc(x.note)}”</span>` : ''}${x.goal ? `<span class="note">🎯 ${esc(x.goal)}</span>` : ''}</div></li>`).join('');
+  const notes = r => `${r.notes ? `<span class="note">“${esc(r.notes)}”</span>` : ''}${r.improvement_target ? `<span class="note">🎯 ${esc(r.improvement_target)}</span>` : ''}`;
+  const li = (r, who) => `<li class="lg"><div class="fl"><b>${tag(r)}</b><small>${fmtDay(r.score_date)}${who ? ' · by ' + esc(nm(r.evaluator_id)) + (r.evaluator_id === r.player_id ? ' (self)' : '') : ''}</small>${notes(r)}</div><small>${r.total != null ? r.total + '/50' : 'Incomplete'}</small></li>`;
+  const sent = S.scores.filter(r => r.evaluator_id === S.uid).slice(0, 10).map(r => li(r, false)).join('');
+  const all = S.scores.slice(0, 15).map(r => li(r, true)).join('');
+  const got = S.feedback.map(x => `<li class="lg"><div class="fl"><small>${fmtDay(x.score_date)}</small>${notes({notes:x.note, improvement_target:x.goal})}</div></li>`).join('');
+  const none = t => `<li class="lg"><span class="mut">${t}</span></li>`;
   return `<h2>Daily Score</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}
   <div class="card"><form data-f="saveScore" novalidate>
   <input type="hidden" name="date" value="${today()}"><p class="mut" style="margin-bottom:12px">📅 Today · ${fmtDay(today())} <small>(date is automatic)</small></p>
@@ -366,11 +382,12 @@ function scoreHTML(){
   ${CATS.map(k => `<label>${CAT_LBL[k]} (0–10)<select name="${k}">${opts}</select></label>`).join('')}
   <label>Note for the player (optional)<input name="notes" maxlength="500"></label>
   <label>Improvement target (optional)<input name="goal" maxlength="200"></label>
-  <p class="mut" style="font-size:13px;margin-bottom:10px">The player sees your note without your name. Only the owner sees who wrote it.</p>
+  <p class="mut" style="font-size:13px;margin-bottom:10px">The player sees your note without your name.</p>
   <p id="sc-total" class="mut" style="margin-bottom:10px">Incomplete: 0 of 5 filled</p>
   <div class="msg" role="alert"></div><button class="btn">Save Rating</button></form></div>
-  <h2>Feedback for you</h2><div class="card"><ul>${fb || '<li class="lg"><span class="mut">No feedback yet.</span></li>'}</ul></div>
-  ${isOwner() ? `<h2>All Ratings <small>(owner only)</small></h2><div class="card"><ul>${log || '<li class="lg"><span class="mut">No ratings yet.</span></li>'}</ul></div>` : '<p class="mut" style="font-size:13px">🔒 Who rated whom is private. Only the owner can see it.</p>'}`;
+  <h2>📥 Feedback for you</h2><div class="card"><ul>${got || none('Nothing received yet.')}</ul></div>
+  <h2>📤 Sent by you</h2><div class="card"><ul>${sent || none('You have not rated anyone yet.')}</ul></div>
+  ${cmdOn() ? `<h2>⚡ All Ratings <small>(Command Mode)</small></h2><div class="card"><ul>${all || none('No ratings yet.')}</ul></div>` : '<p class="mut" style="font-size:13px">🔒 Who rated whom is private.</p>'}`;
 }
 function scoreTotal(f){
   const v = CATS.map(k => f[k].value), n = v.filter(x => x !== '').length;
@@ -390,6 +407,32 @@ document.addEventListener('change', e => {
   if (e.target.name === 'date' || e.target.name === 'player') prefillScore(); else scoreTotal(f);
 });
 
+// ---------- owner tools (Command Mode only) ----------
+const prevDay = d => new Date(Date.parse(d + 'T00:00:00Z') - 864e5).toISOString().slice(0, 10);
+function missingFor(day){   // per active player: how many of the other players they rated on that day
+  const act = S.members.filter(m => m.status === 'active' && m.player_number);
+  return act.map(m => {
+    const others = act.filter(x => x.user_id !== m.user_id);
+    const done = others.filter(x => S.scores.some(r => r.score_date === day && r.evaluator_id === m.user_id && r.player_id === x.user_id && r.total != null)).length;
+    return {name:(S.names[m.user_id] || {}).display_name || 'Player', done, need:others.length};
+  });
+}
+function checkHTML(){
+  const t = today(), y = prevDay(t);
+  const st = x => x.done >= x.need ? '✅ Complete' : x.done === 0 ? '❌ Nothing rated' : '⚠️ ' + x.done + ' of ' + x.need;
+  const blk = (label, day) => `<h3 style="margin-top:12px">${label} · ${fmtDay(day)}</h3><ul>${missingFor(day).map(x => `<li><span>${esc(x.name)}</span><small>${st(x)}</small></li>`).join('')}</ul>`;
+  return `<div class="card"><h3>📋 Daily Check</h3><small>Who has rated the other players. Visible only in Command Mode.</small>${blk('Today', t)}${blk('Yesterday', y)}
+  <p class="mut" style="font-size:13px;margin-top:12px">Ratings older than 90 days are removed automatically. This runs when the owner opens the app.</p></div>`;
+}
+async function purgeOld(){   // keeps 90 days of detailed ratings; runs at most once a day, owner + Command Mode only
+  if (!cmdOn() || !S.team) return;
+  const k = 'ff_purge', d = today();
+  try{ if (localStorage.getItem(k) === d) return; }catch(e){}
+  const cut = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
+  try{ await run(sb.from('daily_scores').delete().eq('team_id', S.team.id).lt('score_date', cut)); localStorage.setItem(k, d); }
+  catch(e){ console.error(e); }
+}
+
 // ---------- start ----------
 async function boot(){
   if (!CONFIG.SUPABASE_URL.includes('.supabase.co') || CONFIG.SUPABASE_ANON_KEY.length < 20)
@@ -397,6 +440,7 @@ async function boot(){
   if (!window.supabase) return setupView('Could not load Supabase', 'Check your internet connection and reload the page.');
   sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {auth:{flowType:'implicit'}});
   S.recovery = LINK_RECOVERY;
+  try{ S.cmd = localStorage.getItem('ff_cmd') === '1'; }catch(e){}
   if (LINK_ERR){ S.linkMsg = 'This reset link is invalid or has expired. Tap "Forgot password?", send a new link and open only the newest email.'; history.replaceState(null, '', location.pathname); }
   // listener is registered BEFORE any await, so the PASSWORD_RECOVERY event is never missed
   sb.auth.onAuthStateChange((ev, ses) => {
