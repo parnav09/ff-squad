@@ -67,14 +67,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '5';
+const VERSION = '6';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, leaveArm:false, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -101,6 +101,7 @@ function friendly(e){
   if (/Invalid join code/i.test(m)) return 'Invalid join code. Ask the team owner for the right one.';
   if (/duplicate|unique/i.test(m)) return 'That player slot is already taken.';
   if (/Not allowed|row-level|permission/i.test(m)) return 'You do not have permission to do that.';
+  if (/new owner/i.test(m)) return 'Choose a player to become the new owner.';
   return 'Something went wrong. Please try again.';
 }
 
@@ -200,10 +201,8 @@ function teamHTML(){
 function settingsHTML(){
   const p = S.names[S.uid] || {};
   const cmd = isOwner() ? `<div class="card"><div class="tg"><div class="fl"><b>⚡ Command Mode</b><small>Owner tools: join code, approvals, fifth player, all ratings, daily check. OFF = you use the app like a normal player.</small></div><button class="sw ${S.cmd ? 'on' : ''}" data-act="cmd" aria-label="Command Mode"></button></div></div>` : '';
-  const leave = isOwner()
-    ? '<p class="mut" style="font-size:13px;text-align:center;margin-top:14px">The owner cannot leave the team (ownership transfer is not available yet).</p>'
-    : `<button class="btn ghost" data-act="leave" style="margin-top:12px;${S.leaveArm ? 'color:var(--er);border-color:var(--er)' : ''}">${S.leaveArm ? 'Tap again to confirm: Leave Team' : 'Leave Team'}</button>`;
-  return `<h2>Settings</h2>${cmd}${cmdOn() ? checkHTML() : ''}
+  const leave = leaveHTML();
+  return `<h2>Settings</h2>${cmd}${cmdOn() ? checkHTML() + backupHTML() : ''}
   <div class="card"><h3>Profile</h3><p>${esc(p.display_name || '')}</p><small>${isOwner() && !S.cmd ? 'player' : esc(S.me.membership_role)}${S.me.player_number ? ' · P' + S.me.player_number + ' ' + ROLES[S.me.player_number] : ''}</small></div>
   <div class="card"><h3>Team</h3><p>${esc(S.team.team_name)}</p><small>${esc(S.team.team_description || 'No description')} · ${esc(S.team.timezone)}</small></div>
   <div class="card"><h3>Account</h3><small>${esc(S.email || '')}</small></div>
@@ -336,6 +335,22 @@ document.addEventListener('click', async e => {
   if (t.dataset.more){ S.more[t.dataset.more] = !S.more[t.dataset.more]; return mainView(); }
   if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
+  if (t.dataset.act === 'own-ask' || t.dataset.act === 'own-cancel'){ S.ownLeave = t.dataset.act === 'own-ask'; S.ownArm = false; return mainView(); }
+  if (t.dataset.act === 'own-do'){
+    const others = S.members.filter(m => m.user_id !== S.uid && m.status === 'active');
+    if (!others.length && !S.ownArm){   // deleting the team: first tap only arms the button
+      S.ownArm = true; mainView();
+      setTimeout(() => { if (S.ownArm){ S.ownArm = false; if (S.view === 'settings' && S.team) mainView(); } }, 5000);
+      return;
+    }
+    S.ownArm = false; t.disabled = true;
+    const sel = document.getElementById('new-owner');
+    try{ await run(sb.rpc('leave_team', {p_new_owner: others.length && sel ? sel.value : null})); S.ownLeave = false; S.view = 'home'; await load(); }
+    catch(err){ console.error(err); t.disabled = false; bkSay(friendly(err), 'er'); }
+    return;
+  }
+  if (t.dataset.act === 'bk-dl') return downloadBackup();
+  if (t.dataset.act === 'bk-pick'){ const f = document.getElementById('bk-file'); if (f) f.click(); return; }
   if (t.dataset.act === 'leave'){
     if (!S.leaveArm){   // first tap only arms the button (no popup); it disarms after 5 seconds
       S.leaveArm = true; mainView();
@@ -465,6 +480,56 @@ function limitDays(rows, key){
   return {shown, hidden: rows.length - shown.length};
 }
 const moreBtn = (key, hidden) => S.more[key] ? `<button class="more" data-more="${key}">Show less ▴</button>` : hidden ? `<button class="more" data-more="${key}">More ▾ · ${hidden} older</button>` : '';
+
+// ---------- leave / delete team, backup and restore ----------
+const bkSay = (t, c) => { const m = document.getElementById('bk-msg') || document.getElementById('own-msg'); if (m){ m.className = 'msg ' + c; m.textContent = t; } };
+function leaveHTML(){
+  if (!isOwner()) return `<button class="btn ghost" data-act="leave" style="margin-top:12px;${S.leaveArm ? 'color:var(--er);border-color:var(--er)' : ''}">${S.leaveArm ? 'Tap again to confirm: Leave Team' : 'Leave Team'}</button>`;
+  if (!S.ownLeave) return '<button class="btn ghost" data-act="own-ask" style="margin-top:12px">Leave Team</button>';
+  const others = S.members.filter(m => m.user_id !== S.uid && m.status === 'active');
+  if (others.length) return `<div class="card" style="margin-top:12px"><h3>Leave as owner</h3><p class="mut" style="margin-bottom:10px">Choose who becomes the new owner. Then you leave and your slot becomes free.</p>
+    <label>New owner<select id="new-owner">${others.map(m => `<option value="${m.user_id}">${m.player_number ? 'P' + m.player_number + ' · ' : ''}${esc((S.names[m.user_id] || {}).display_name || 'Player')}</option>`).join('')}</select></label>
+    <div class="msg" id="own-msg" role="alert"></div><button class="btn danger" data-act="own-do">Transfer ownership &amp; leave</button>
+    <button class="btn ghost" style="margin-top:10px" data-act="own-cancel">Cancel</button></div>`;
+  return `<div class="card" style="margin-top:12px"><h3>⚠️ Delete team?</h3><p class="mut" style="margin-bottom:10px">You are the only member. Leaving deletes <b>${esc(S.team.team_name)}</b> and ALL its data from the server: ratings, settings and members. This cannot be undone.</p>
+    <button class="btn ghost" data-act="bk-dl">💾 Download backup first</button><div class="msg" id="own-msg" role="alert" style="margin-top:10px"></div>
+    <button class="btn danger" data-act="own-do">${S.ownArm ? 'Tap again to DELETE everything' : 'Delete team &amp; leave'}</button>
+    <button class="btn ghost" style="margin-top:10px" data-act="own-cancel">Cancel</button></div>`;
+}
+function backupHTML(){
+  return `<div class="card"><h3>💾 Backup &amp; Restore</h3><small>Download all team data as a file and restore it later. Restore only adds saved ratings back; it never deletes or changes anything.</small>
+  <div class="msg" id="bk-msg" role="alert" style="margin-top:10px"></div>
+  <button class="btn" data-act="bk-dl">Download backup</button><button class="btn ghost" style="margin-top:10px" data-act="bk-pick">Restore from backup file</button>
+  <input type="file" id="bk-file" accept=".json,application/json" hidden></div>`;
+}
+async function downloadBackup(){
+  try{
+    const tid = S.team.id;
+    const [ds, tr, st] = await Promise.all([
+      run(sb.from('daily_scores').select('score_date,player_id,evaluator_id,communication,coordination,decision_making,role_execution,map_awareness,notes,improvement_target').eq('team_id', tid)),
+      run(sb.from('team_ratings').select('*').eq('team_id', tid)),
+      run(sb.from('team_settings').select('setting_key,setting_value').eq('team_id', tid))]);
+    const data = {app:'ff-squad', format:1, exported_at:new Date().toISOString(),
+      team:{name:S.team.team_name, description:S.team.team_description, timezone:S.team.timezone},
+      members:S.members.map(m => ({user_id:m.user_id, name:(S.names[m.user_id] || {}).display_name || '', player_number:m.player_number, status:m.status})),
+      settings:st, daily_scores:ds, team_ratings:tr.map(({id, team_id, total, created_at, updated_at, ...r}) => r)};
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], {type:'application/json'}));
+    a.download = 'ff-squad-backup-' + today() + '.json'; document.body.appendChild(a); a.click(); a.remove();
+    bkSay('Backup saved to your phone: ' + ds.length + ' daily ratings, ' + tr.length + ' team ratings.', 'ok');
+  }catch(err){ console.error(err); bkSay(friendly(err), 'er'); }
+}
+document.addEventListener('change', async e => {
+  if (e.target.id !== 'bk-file' || !e.target.files[0]) return;
+  try{
+    const data = JSON.parse(await e.target.files[0].text());
+    if (data.app !== 'ff-squad' || !Array.isArray(data.daily_scores)) bad('This is not an FF SQUAD backup file.');
+    bkSay('Restoring…', 'ok');
+    const r = await run(sb.rpc('restore_backup', {p_team:S.team.id, p_data:{daily_scores:data.daily_scores, team_ratings:data.team_ratings || [], settings:data.settings || []}}));
+    await load(); bkSay('Restored: ' + r.daily_scores + ' daily ratings and ' + r.team_ratings + ' team ratings added.', 'ok');
+  }catch(err){ console.error(err); bkSay(friendly(err), 'er'); }
+  e.target.value = '';
+});
 
 // ---------- start ----------
 async function boot(){
