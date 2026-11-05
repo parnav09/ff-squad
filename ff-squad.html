@@ -54,6 +54,7 @@ li.lg{align-items:flex-start}
 .sw::after{content:"";position:absolute;top:4px;left:4px;width:24px;height:24px;border-radius:50%;background:var(--tx2);transition:transform .2s}
 .sw.on{background:linear-gradient(90deg,var(--cy),var(--bl));border-color:transparent}
 .sw.on::after{transform:translateX(22px);background:#05060B}
+.more{display:block;width:100%;min-height:44px;margin-top:8px;background:none;border:1px dashed var(--bd);border-radius:12px;color:var(--cy);font:600 14px system-ui;cursor:pointer}
 </style>
 </head>
 <body>
@@ -66,14 +67,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '0.4.1 (Phase C1b)';
+const VERSION = '5';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, leaveArm:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -199,12 +200,15 @@ function teamHTML(){
 function settingsHTML(){
   const p = S.names[S.uid] || {};
   const cmd = isOwner() ? `<div class="card"><div class="tg"><div class="fl"><b>⚡ Command Mode</b><small>Owner tools: join code, approvals, fifth player, all ratings, daily check. OFF = you use the app like a normal player.</small></div><button class="sw ${S.cmd ? 'on' : ''}" data-act="cmd" aria-label="Command Mode"></button></div></div>` : '';
+  const leave = isOwner()
+    ? '<p class="mut" style="font-size:13px;text-align:center;margin-top:14px">The owner cannot leave the team (ownership transfer is not available yet).</p>'
+    : `<button class="btn ghost" data-act="leave" style="margin-top:12px;${S.leaveArm ? 'color:var(--er);border-color:var(--er)' : ''}">${S.leaveArm ? 'Tap again to confirm: Leave Team' : 'Leave Team'}</button>`;
   return `<h2>Settings</h2>${cmd}${cmdOn() ? checkHTML() : ''}
   <div class="card"><h3>Profile</h3><p>${esc(p.display_name || '')}</p><small>${isOwner() && !S.cmd ? 'player' : esc(S.me.membership_role)}${S.me.player_number ? ' · P' + S.me.player_number + ' ' + ROLES[S.me.player_number] : ''}</small></div>
   <div class="card"><h3>Team</h3><p>${esc(S.team.team_name)}</p><small>${esc(S.team.team_description || 'No description')} · ${esc(S.team.timezone)}</small></div>
   <div class="card"><h3>Account</h3><small>${esc(S.email || '')}</small></div>
-  <div class="card"><h3>Status</h3><small>Backend: configured · Realtime: ${LBL[S.sync]} · App version ${VERSION}</small></div>
-  <button class="btn ghost" data-act="logout">Log out</button>`;
+  <div class="card"><h3>Status</h3><small>Backend: configured · Realtime: ${LBL[S.sync]} · Version ${VERSION}</small></div>
+  <button class="btn ghost" data-act="logout">Log out</button>${leave}`;
 }
 
 // ---------- data ----------
@@ -226,7 +230,7 @@ async function load(){
       run(sb.from('teams').select('*').eq('id', tid).single()),
       run(sb.from('team_members').select('*').eq('team_id', tid).order('joined_at'))]);
     const pr = await run(sb.from('profiles').select('id,display_name,avatar_url').in('id', [...new Set(ms.map(x => x.user_id))]));
-    const since = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+    const since = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     S.scores = await run(sb.from('daily_scores').select('*').eq('team_id', tid).gte('score_date', since).order('score_date', {ascending:false}));
     const [sm, fb, st] = await Promise.all([
       run(sb.rpc('daily_summary', {p_team:tid, p_since:since})),
@@ -327,10 +331,22 @@ document.addEventListener('submit', async e => {
   finally{ delete f.dataset.busy; if (btn) btn.disabled = false; }
 });
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-go],[data-nav],[data-act]'); if (!t) return;
+  const t = e.target.closest('[data-go],[data-nav],[data-act],[data-more]'); if (!t) return;
   if (t.dataset.go) return authView(t.dataset.go);
+  if (t.dataset.more){ S.more[t.dataset.more] = !S.more[t.dataset.more]; return mainView(); }
   if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
+  if (t.dataset.act === 'leave'){
+    if (!S.leaveArm){   // first tap only arms the button (no popup); it disarms after 5 seconds
+      S.leaveArm = true; mainView();
+      setTimeout(() => { if (S.leaveArm){ S.leaveArm = false; if (S.view === 'settings' && S.team) mainView(); } }, 5000);
+      return;
+    }
+    S.leaveArm = false;
+    try{ await run(sb.rpc('leave_team')); S.view = 'home'; await load(); }
+    catch(err){ console.error(err); alert(friendly(err)); mainView(); }
+    return;
+  }
   if (t.dataset.act === 'cmd'){
     S.cmd = !S.cmd; try{ localStorage.setItem('ff_cmd', S.cmd ? '1' : '0'); }catch(err){}
     mainView(); purgeOld(); return;
@@ -371,10 +387,11 @@ function scoreHTML(){
   const tag = r => { const pl = S.members.find(m => m.user_id === r.player_id); return 'P' + (pl ? pl.player_number : '?') + ' ' + esc(nm(r.player_id)); };
   const notes = r => `${r.notes ? `<span class="note">“${esc(r.notes)}”</span>` : ''}${r.improvement_target ? `<span class="note">🎯 ${esc(r.improvement_target)}</span>` : ''}`;
   const li = (r, who) => `<li class="lg"><div class="fl"><b>${tag(r)}</b><small>${fmtDay(r.score_date)}${who ? ' · by ' + esc(nm(r.evaluator_id)) + (r.evaluator_id === r.player_id ? ' (self)' : '') : ''}</small>${notes(r)}</div><small>${r.total != null ? r.total + '/50' : 'Incomplete'}</small></li>`;
-  const sent = S.scores.filter(r => r.evaluator_id === S.uid).slice(0, 10).map(r => li(r, false)).join('');
-  const all = S.scores.slice(0, 15).map(r => li(r, true)).join('');
-  const got = S.feedback.map(x => `<li class="lg"><div class="fl"><small>${fmtDay(x.score_date)}</small>${notes({notes:x.note, improvement_target:x.goal})}</div></li>`).join('');
   const none = t => `<li class="lg"><span class="mut">${t}</span></li>`;
+  const block = (rows, key, f, empty) => { const {shown, hidden} = limitDays(rows, key); return `<ul>${shown.map(f).join('') || none(empty)}</ul>${moreBtn(key, hidden)}`; };
+  const got = block(S.feedback, 'got', x => `<li class="lg"><div class="fl"><small>${fmtDay(x.score_date)}</small>${notes({notes:x.note, improvement_target:x.goal})}</div></li>`, 'Nothing received yet.');
+  const sent = block(S.scores.filter(r => r.evaluator_id === S.uid), 'sent', r => li(r, false), 'You have not rated anyone yet.');
+  const all = block(S.scores, 'all', r => li(r, true), 'No ratings yet.');
   return `<h2>Daily Score</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}
   <div class="card"><form data-f="saveScore" novalidate>
   <input type="hidden" name="date" value="${today()}"><p class="mut" style="margin-bottom:12px">📅 Today · ${fmtDay(today())} <small>(date is automatic)</small></p>
@@ -385,9 +402,9 @@ function scoreHTML(){
   <p class="mut" style="font-size:13px;margin-bottom:10px">The player sees your note without your name.</p>
   <p id="sc-total" class="mut" style="margin-bottom:10px">Incomplete: 0 of 5 filled</p>
   <div class="msg" role="alert"></div><button class="btn">Save Rating</button></form></div>
-  <h2>📥 Feedback for you</h2><div class="card"><ul>${got || none('Nothing received yet.')}</ul></div>
-  <h2>📤 Sent by you</h2><div class="card"><ul>${sent || none('You have not rated anyone yet.')}</ul></div>
-  ${cmdOn() ? `<h2>⚡ All Ratings <small>(Command Mode)</small></h2><div class="card"><ul>${all || none('No ratings yet.')}</ul></div>` : '<p class="mut" style="font-size:13px">🔒 Who rated whom is private.</p>'}`;
+  <h2>📥 Feedback for you</h2><div class="card">${got}</div>
+  <h2>📤 Sent by you</h2><div class="card">${sent}</div>
+  ${cmdOn() ? `<h2>⚡ All Ratings <small>(Command Mode)</small></h2><div class="card">${all}</div>` : '<p class="mut" style="font-size:13px">🔒 Who rated whom is private.</p>'}`;
 }
 function scoreTotal(f){
   const v = CATS.map(k => f[k].value), n = v.filter(x => x !== '').length;
@@ -421,17 +438,33 @@ function checkHTML(){
   const t = today(), y = prevDay(t);
   const st = x => x.done >= x.need ? '✅ Complete' : x.done === 0 ? '❌ Nothing rated' : '⚠️ ' + x.done + ' of ' + x.need;
   const blk = (label, day) => `<h3 style="margin-top:12px">${label} · ${fmtDay(day)}</h3><ul>${missingFor(day).map(x => `<li><span>${esc(x.name)}</span><small>${st(x)}</small></li>`).join('')}</ul>`;
-  return `<div class="card"><h3>📋 Daily Check</h3><small>Who has rated the other players. Visible only in Command Mode.</small>${blk('Today', t)}${blk('Yesterday', y)}
-  <p class="mut" style="font-size:13px;margin-top:12px">Ratings older than 90 days are removed automatically. This runs when the owner opens the app.</p></div>`;
+  const old = [...new Set(S.scores.map(r => r.score_date))].filter(d => d < y).sort().reverse();
+  const olderRows = old.map(d => { const bad = missingFor(d).filter(x => x.done < x.need);
+    return `<li><span>${fmtDay(d)}</span><small>${bad.length ? '⚠️ ' + bad.map(x => esc(x.name) + ' ' + x.done + '/' + x.need).join(', ') : '✅ All complete'}</small></li>`; }).join('');
+  const more = !old.length ? '' : S.more.check ? `<ul style="margin-top:8px">${olderRows}</ul><button class="more" data-more="check">Show less ▴</button>` : `<button class="more" data-more="check">More ▾ · ${old.length} older days</button>`;
+  let info = ''; try{ info = localStorage.getItem('ff_purge_info') || ''; }catch(e){}
+  return `<div class="card"><h3>📋 Daily Check</h3><small>Who has rated the other players. Visible only in Command Mode.</small>${blk('Today', t)}${blk('Yesterday', y)}${more}
+  <p class="mut" style="font-size:13px;margin-top:12px">🧹 Ratings older than 90 days are removed automatically when the owner opens the app.${info ? ' Last cleanup: ' + esc(info) + '.' : ''}</p></div>`;
 }
-async function purgeOld(){   // keeps 90 days of detailed ratings; runs at most once a day, owner + Command Mode only
+async function purgeOld(){   // keeps 90 days of detailed ratings; at most once a day, owner + Command Mode only
   if (!cmdOn() || !S.team) return;
   const k = 'ff_purge', d = today();
   try{ if (localStorage.getItem(k) === d) return; }catch(e){}
   const cut = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
-  try{ await run(sb.from('daily_scores').delete().eq('team_id', S.team.id).lt('score_date', cut)); localStorage.setItem(k, d); }
-  catch(e){ console.error(e); }
+  try{
+    const gone = await run(sb.from('daily_scores').delete().eq('team_id', S.team.id).lt('score_date', cut).select('id'));
+    localStorage.setItem(k, d); localStorage.setItem('ff_purge_info', fmtDay(d) + ' · removed ' + gone.length);
+  }catch(e){ console.error(e); }
 }
+
+// ---------- "More" lists: newest 2 days by default, everything (up to 90 days) on tap ----------
+function limitDays(rows, key){
+  const days = [...new Set(rows.map(r => r.score_date))].sort().reverse();
+  const keep = S.more[key] ? days : days.slice(0, 2);
+  const shown = rows.filter(r => keep.includes(r.score_date));
+  return {shown, hidden: rows.length - shown.length};
+}
+const moreBtn = (key, hidden) => S.more[key] ? `<button class="more" data-more="${key}">Show less ▴</button>` : hidden ? `<button class="more" data-more="${key}">More ▾ · ${hidden} older</button>` : '';
 
 // ---------- start ----------
 async function boot(){
