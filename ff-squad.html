@@ -55,6 +55,7 @@ li.lg{align-items:flex-start}
 .sw.on{background:linear-gradient(90deg,var(--cy),var(--bl));border-color:transparent}
 .sw.on::after{transform:translateX(22px);background:#05060B}
 .more{display:block;width:100%;min-height:44px;margin-top:8px;background:none;border:1px dashed var(--bd);border-radius:12px;color:var(--cy);font:600 14px system-ui;cursor:pointer}
+.ic{flex:none;background:none;border:0;font-size:18px;min-width:44px;min-height:44px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -67,14 +68,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '7';
+const VERSION = '8';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, nicks:{}, editNick:null, ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -102,6 +103,8 @@ function friendly(e){
   if (/duplicate|unique/i.test(m)) return 'That player slot is already taken.';
   if (/Not allowed|row-level|permission/i.test(m)) return 'You do not have permission to do that.';
   if (/new owner/i.test(m)) return 'Choose a player to become the new owner.';
+  if (/Name already used/i.test(m)) return 'A player with this name is already in the team. Add your surname or a nickname.';
+  if (/Name must be/i.test(m)) return 'Name must be 2 to 40 characters.';
   return 'Something went wrong. Please try again.';
 }
 
@@ -136,6 +139,7 @@ function onboardView(){
   <p class="mut" style="margin-bottom:10px">Timezone: ${esc(TZ)}</p>
   <div class="msg" role="alert"></div><button class="btn">Create Team</button></form></div>
   <div class="card"><h3>Join Existing Team</h3><form data-f="joinTeam" novalidate>
+  <label>Your name in this team (only if asked)<input name="name" maxlength="40" autocomplete="nickname"></label>
   <label>Join code from your team owner<input name="code" maxlength="12" autocapitalize="characters" autocomplete="off"></label>
   <div class="msg" role="alert"></div><button class="btn ghost">Join Team</button></form></div>
   <div class="links"><a data-act="logout">Log out</a></div></div>`;
@@ -189,14 +193,17 @@ function teamHTML(){
     <select name="slot">${free.map(x => `<option value="${x}">P${x} ${ROLES[x]}</option>`).join('')}</select>
     <button class="btn sm" ${free.length ? '' : 'disabled'}>${m.status === 'active' ? 'Assign' : 'Approve'}</button><div class="msg"></div></form>`;
   const todo = S.members.filter(m => m.status !== 'active' || !m.player_number);
-  const roster = S.members.filter(m => m.status === 'active').map(m =>
-    `<li><span>${nameOf(m)}</span><small>${m.player_number ? 'P' + m.player_number + ' · ' + ROLES[m.player_number] : 'No slot'}</small></li>`).join('');
+  const roster = S.members.filter(m => m.status === 'active').map(m => {
+    const mine = m.user_id === S.uid, nk = S.nicks[m.user_id];
+    const edit = S.editNick === m.user_id ? `<li class="lg" style="display:block"><form class="row" data-f="nick" style="border:0;padding:0"><input type="hidden" name="target" value="${m.user_id}"><input name="nick" maxlength="24" placeholder="Your private nickname" value="${esc(nk || '')}" style="flex:1 1 160px;margin:0"><button class="btn sm">Save</button><div class="msg"></div></form></li>` : '';
+    return `<li class="lg"><div class="fl"><b>${nameOf(m)}${mine ? ' (you)' : ''}</b>${nk ? `<small>Your nickname: ${esc(nk)}</small>` : ''}<small>${m.player_number ? 'P' + m.player_number + ' · ' + ROLES[m.player_number] : 'No slot'}</small></div>${mine ? '' : `<button class="ic" data-nick="${m.user_id}" aria-label="Set nickname">✏️</button>`}</li>${edit}`;
+  }).join('');
   const sub = fifth
     ? `<div class="card"><h3>Fifth player · Substitute (P5)</h3><p class="mut" style="margin-bottom:10px">P5 is ON. Ask the player to sign up and join with the code above. They appear in "Waiting for you" and the P5 slot is picked automatically.</p>${used.has(5) ? '' : '<button class="btn ghost" data-act="fifth-off">Turn off P5</button>'}</div>`
     : `<div class="card"><h3>Fifth player (optional)</h3><p class="mut" style="margin-bottom:10px">One substitute (P5) for days when a main player is unavailable. Maximum 5 players.</p><button class="btn" data-act="fifth-on">+ Add fifth player</button></div>`;
   const own = cmdOn() ? `<div class="card"><small>Join code — share only with your players</small><div class="code">${esc(S.team.invite_code)}</div></div>
     ${todo.length ? `<div class="card"><h3>Waiting for you</h3>${todo.map(row).join('')}</div>` : ''}${sub}` : '';
-  return `<h2>Team</h2>${own}<div class="card"><h3>Roster</h3><ul>${roster}</ul></div>`;
+  return `<h2>Team</h2>${own}<div class="card"><h3>Roster</h3><small>✏️ Save a private nickname for a teammate. Only you can see it. Scoreboards always show original names.</small><ul>${roster}</ul></div>`;
 }
 function settingsHTML(){
   const p = S.names[S.uid] || {};
@@ -205,6 +212,9 @@ function settingsHTML(){
   return `<h2>Settings</h2>${cmd}${cmdOn() ? checkHTML() + backupHTML() : ''}
   <div class="card"><h3>Profile</h3><p>${esc(p.display_name || '')}</p><small>${isOwner() && !S.cmd ? 'player' : esc(S.me.membership_role)}${S.me.player_number ? ' · P' + S.me.player_number + ' ' + ROLES[S.me.player_number] : ''}</small></div>
   <div class="card"><h3>Team</h3><p>${esc(S.team.team_name)}</p><small>${esc(S.team.team_description || 'No description')} · ${esc(S.team.timezone)}</small></div>
+  <div class="card"><h3>Your name</h3><form data-f="rename" novalidate><label>Name shown on scoreboards<input name="name" maxlength="40" value="${esc(p.display_name || '')}"></label>
+  <div class="msg" role="alert"></div><button class="btn ghost">Save name</button></form>
+  <small style="display:block;margin-top:10px">If another player already uses this name, add your surname or a nickname.</small></div>
   <div class="card"><h3>Account</h3><small>${esc(S.email || '')}</small></div>
   <div class="card"><h3>Status</h3><small>Backend: configured · Realtime: ${LBL[S.sync]} · Version ${VERSION}</small></div>
   <button class="btn ghost" data-act="logout">Log out</button>${leave}`;
@@ -231,15 +241,17 @@ async function load(){
     const pr = await run(sb.from('profiles').select('id,display_name,avatar_url').in('id', [...new Set(ms.map(x => x.user_id))]));
     const since = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     S.scores = await run(sb.from('daily_scores').select('*').eq('team_id', tid).gte('score_date', since).order('score_date', {ascending:false}));
-    const [sm, fb, st] = await Promise.all([
+    const [sm, fb, st, nk] = await Promise.all([
       run(sb.rpc('daily_summary', {p_team:tid, p_since:since})),
       run(sb.rpc('my_feedback', {p_team:tid, p_since:since})),
-      run(sb.from('team_settings').select('*').eq('team_id', tid))]);
+      run(sb.from('team_settings').select('*').eq('team_id', tid)),
+      run(sb.from('player_nicknames').select('target_id,nickname').eq('viewer_id', S.uid)).catch(() => [])]);
     const seen = {};
     S.ov = {days: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date)).map(r => ({player_id:r.player_id, score_date:r.score_date, n:r.n, avg:r.avg_total})),
       targets: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date))
         .filter(r => r.goal && !seen[r.player_id] && (seen[r.player_id] = 1)).map(r => ({player_id:r.player_id, target:r.goal}))};
     S.feedback = fb; S.settings = Object.fromEntries(st.map(x => [x.setting_key, x.setting_value]));
+    S.nicks = Object.fromEntries(nk.map(x => [x.target_id, x.nickname]));
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
     if (S.view === 'score' && S.dirty) return;   // do not wipe a half-filled form
     mainView();
@@ -300,6 +312,7 @@ const H = {
   },
   async joinTeam(d){
     if (d.code.trim().length < 4) bad('Enter the join code.');
+    if ((d.name || '').trim()) await run(sb.rpc('set_display_name', {p_name:d.name}));
     await run(sb.rpc('join_team', {p_code:d.code}));
     await load();
   },
@@ -314,6 +327,16 @@ const H = {
     await run(sb.from('daily_scores').upsert(row, {onConflict:'team_id,score_date,player_id,evaluator_id'}));
     S.dirty = false; S.flash = filled === 5 ? 'Rating saved ✓' : 'Saved as Incomplete (' + filled + ' of 5 filled)';
     await load();
+  },
+  async rename(d){
+    await run(sb.rpc('set_display_name', {p_name:d.name}));
+    await load();
+  },
+  async nick(d){   // private nickname: only the person who saves it can see it
+    const v = d.nick.trim();
+    if (v) await run(sb.from('player_nicknames').upsert({team_id:S.team.id, viewer_id:S.uid, target_id:d.target, nickname:v}, {onConflict:'viewer_id,target_id'}));
+    else await run(sb.from('player_nicknames').delete().eq('viewer_id', S.uid).eq('target_id', d.target));
+    S.editNick = null; await load();
   },
   async assign(d){
     await run(sb.rpc('assign_member', {p_member:d.id, p_player:Number(d.slot), p_activate:true}));
@@ -330,9 +353,10 @@ document.addEventListener('submit', async e => {
   finally{ delete f.dataset.busy; if (btn) btn.disabled = false; }
 });
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-go],[data-nav],[data-act],[data-more]'); if (!t) return;
+  const t = e.target.closest('[data-go],[data-nav],[data-act],[data-more],[data-nick]'); if (!t) return;
   if (t.dataset.go) return authView(t.dataset.go);
   if (t.dataset.more){ S.more[t.dataset.more] = !S.more[t.dataset.more]; return mainView(); }
+  if (t.dataset.nick){ S.editNick = S.editNick === t.dataset.nick ? null : t.dataset.nick; return mainView(); }
   if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
   if (t.dataset.act === 'own-ask' || t.dataset.act === 'own-cancel'){ S.ownLeave = t.dataset.act === 'own-ask'; S.ownArm = false; return mainView(); }
@@ -418,7 +442,7 @@ function scoreHTML(){
   return `<h2>Daily Score</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}
   <div class="card"><form data-f="saveScore" novalidate>
   <input type="hidden" name="date" value="${today()}"><p class="mut" style="margin-bottom:12px">📅 Today · ${fmtDay(today())} <small>(date is automatic)</small></p>
-  <label>Player<select name="player">${slots.map(m => `<option value="${m.user_id}">P${m.player_number} · ${esc(nm(m.user_id))}</option>`).join('')}</select></label>
+  <label>Player<select name="player">${slots.map(m => `<option value="${m.user_id}">P${m.player_number} · ${esc(nm(m.user_id))}${S.nicks[m.user_id] ? ' (' + esc(S.nicks[m.user_id]) + ')' : ''}</option>`).join('')}</select></label>
   ${CATS.map(k => `<label>${CAT_LBL[k]} (0–10)<select name="${k}">${opts}</select></label>`).join('')}
   <label>Note for the player (optional)<input name="notes" maxlength="500"></label>
   <label>Improvement target (optional)<input name="goal" maxlength="200"></label>
