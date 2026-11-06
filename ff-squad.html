@@ -68,14 +68,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '9';
+const VERSION = '11';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, nicks:{}, editNick:null, nickMode:null, tflash:'', ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, nicks:{}, editNick:null, nickMode:null, introOpen:false, nickSeen:false, tflash:'', ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -202,20 +202,22 @@ function teamHTML(){
   const tf = S.tflash ? `<p class="msg ok">${esc(S.tflash)}</p>` : ''; S.tflash = '';
   let nickBlock = '';
   if (others.length){
+    const intro = S.introOpen || !nickDone();   // the big card is shown once: remembered as soon as it is first seen
+    if (intro){ S.introOpen = true; setNickDone(); }
     if (S.nickMode === 'all') nickBlock = `<div class="card"><h3>✏️ Your private nicknames</h3><small>Only you can see these. Scoreboards always show original names. Leave a box empty to skip that player.</small>
       <form data-f="nickall" novalidate style="margin-top:12px">${others.map(m => `<label>${nameOf(m)} · ${m.player_number ? 'P' + m.player_number : 'no slot'}<input name="n_${m.user_id}" maxlength="24" value="${esc(S.nicks[m.user_id] || '')}"></label>`).join('')}
       <div class="msg" role="alert"></div><button class="btn">Save nicknames</button></form>
       <button class="btn ghost" style="margin-top:10px" data-act="nick-cancel">Cancel</button></div>`;
-    else if (!nickDone()) nickBlock = `<div class="card"><h3>👋 Name your teammates? (optional)</h3><p class="mut" style="margin-bottom:12px">Save a private nickname for each teammate, like contacts on your phone. Only you can see them, and scoreboards still show original names.</p>
+    else if (intro) nickBlock = `<div class="card"><h3>👋 Name your teammates? (optional)</h3><p class="mut" style="margin-bottom:12px">Save a private nickname for each teammate, like contacts on your phone. Only you can see them, and scoreboards still show original names.</p>
       <button class="btn" data-act="nick-open">Set nicknames</button><button class="btn ghost" style="margin-top:10px" data-act="nick-skip">Not now — I don't want nicknames</button></div>`;
-    else nickBlock = '<p class="mut" style="font-size:13px;margin-bottom:12px">✏️ Private nicknames · <a data-act="nick-open">Edit</a></p>';
+    else nickBlock = '';
   }
   const sub = fifth
     ? `<div class="card"><h3>Fifth player · Substitute (P5)</h3><p class="mut" style="margin-bottom:10px">P5 is ON. Ask the player to sign up and join with the code above. They appear in "Waiting for you" and the P5 slot is picked automatically.</p>${used.has(5) ? '' : '<button class="btn ghost" data-act="fifth-off">Turn off P5</button>'}</div>`
     : `<div class="card"><h3>Fifth player (optional)</h3><p class="mut" style="margin-bottom:10px">One substitute (P5) for days when a main player is unavailable. Maximum 5 players.</p><button class="btn" data-act="fifth-on">+ Add fifth player</button></div>`;
   const own = cmdOn() ? `<div class="card"><small>Join code — share only with your players</small><div class="code">${esc(S.team.invite_code)}</div></div>
     ${todo.length ? `<div class="card"><h3>Waiting for you</h3>${todo.map(row).join('')}</div>` : ''}${sub}` : '';
-  return `<h2>Team</h2>${tf}${own}${nickBlock}<div class="card"><h3>Roster</h3><ul>${roster}</ul></div>`;
+  return `<h2>Team</h2>${tf}${own}${nickBlock}<div class="card"><div class="tg"><h3 style="margin:0;flex:1">Roster</h3>${others.length ? '<button class="ic" data-act="nick-open" aria-label="Edit nicknames">✏️</button>' : ''}</div><ul>${roster}</ul></div>`;
 }
 function settingsHTML(){
   const p = S.names[S.uid] || {};
@@ -238,6 +240,7 @@ async function load(){
     const {data:{session}} = await sb.auth.getSession();
     if (!session){ S.uid = null; S.me = S.team = null; unsub(); authView(); if (S.linkMsg){ say(app.querySelector('form'), 'er', S.linkMsg); S.linkMsg = ''; } return; }
     S.uid = session.user.id; S.email = session.user.email;
+    S.nickSeen = !!(session.user.user_metadata || {}).nick_intro;   // remembered on the account, so every phone knows
     if (S.recovery) return recoverView();
     const [p, m] = await Promise.all([
       run(sb.from('profiles').select('*').eq('id', S.uid).maybeSingle()),
@@ -349,13 +352,13 @@ const H = {
     Object.keys(d).filter(k => k.startsWith('n_')).forEach(k => { const id = k.slice(2), v = (d[k] || '').trim(); if (v) rows.push({team_id:S.team.id, viewer_id:S.uid, target_id:id, nickname:v}); else clear.push(id); });
     if (rows.length) await run(sb.from('player_nicknames').upsert(rows, {onConflict:'viewer_id,target_id'}));
     if (clear.length) await run(sb.from('player_nicknames').delete().eq('viewer_id', S.uid).in('target_id', clear));
-    setNickDone(); S.nickMode = null; S.tflash = rows.length ? 'Nicknames saved ✓' : 'Saved. No nicknames set.'; await load();
+    setNickDone(); S.introOpen = false; S.nickMode = null; S.tflash = rows.length ? 'Nicknames saved ✓' : 'Saved. No nicknames set.'; await load();
   },
   async nick(d){   // private nickname: only the person who saves it can see it
     const v = d.nick.trim();
     if (v) await run(sb.from('player_nicknames').upsert({team_id:S.team.id, viewer_id:S.uid, target_id:d.target, nickname:v}, {onConflict:'viewer_id,target_id'}));
     else await run(sb.from('player_nicknames').delete().eq('viewer_id', S.uid).eq('target_id', d.target));
-    S.editNick = null; setNickDone(); await load();
+    S.editNick = null; setNickDone(); S.introOpen = false; await load();
   },
   async assign(d){
     await run(sb.rpc('assign_member', {p_member:d.id, p_player:Number(d.slot), p_activate:true}));
@@ -376,10 +379,10 @@ document.addEventListener('click', async e => {
   if (t.dataset.go) return authView(t.dataset.go);
   if (t.dataset.more){ S.more[t.dataset.more] = !S.more[t.dataset.more]; return mainView(); }
   if (t.dataset.nick){ S.editNick = S.editNick === t.dataset.nick ? null : t.dataset.nick; return mainView(); }
-  if (t.dataset.nav){ S.view = t.dataset.nav; S.dirty = false; return mainView(); }
+  if (t.dataset.nav){ S.view = t.dataset.nav; S.introOpen = false; S.dirty = false; S.introOpen = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
-  if (t.dataset.act === 'nick-open' || t.dataset.act === 'nick-cancel'){ S.nickMode = t.dataset.act === 'nick-open' ? 'all' : null; return mainView(); }
-  if (t.dataset.act === 'nick-skip'){ setNickDone(); S.tflash = 'No problem. You can add nicknames anytime with Edit.'; return mainView(); }
+  if (t.dataset.act === 'nick-open' || t.dataset.act === 'nick-cancel'){ S.nickMode = t.dataset.act === 'nick-open' ? 'all' : null; S.introOpen = false; return mainView(); }
+  if (t.dataset.act === 'nick-skip'){ setNickDone(); S.introOpen = false; S.tflash = 'No problem. You can add nicknames anytime with Edit.'; return mainView(); }
   if (t.dataset.act === 'own-ask' || t.dataset.act === 'own-cancel'){ S.ownLeave = t.dataset.act === 'own-ask'; S.ownArm = false; return mainView(); }
   if (t.dataset.act === 'own-do'){
     const others = S.members.filter(m => m.user_id !== S.uid && m.status === 'active');
@@ -586,8 +589,8 @@ document.addEventListener('change', async e => {
 
 // ---------- nickname intro: asked once, the choice (save or skip) is remembered on this phone ----------
 const nickKey = () => 'ff_nick_' + S.uid;
-const nickDone = () => { try{ return localStorage.getItem(nickKey()) === '1'; }catch(e){ return true; } };
-const setNickDone = () => { try{ localStorage.setItem(nickKey(), '1'); }catch(e){} };
+const nickDone = () => { try{ return S.nickSeen || localStorage.getItem(nickKey()) === '1'; }catch(e){ return !!S.nickSeen; } };
+const setNickDone = () => { S.nickSeen = true; try{ localStorage.setItem(nickKey(), '1'); }catch(e){} if (sb) sb.auth.updateUser({data:{nick_intro:true}}).catch(() => {}); };
 const needsNick = () => S.members.some(m => m.status === 'active' && m.user_id !== S.uid) && !nickDone();
 
 // ---------- start ----------
