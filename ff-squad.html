@@ -56,6 +56,9 @@ li.lg{align-items:flex-start}
 .sw.on::after{transform:translateX(22px);background:#05060B}
 .more{display:block;width:100%;min-height:44px;margin-top:8px;background:none;border:1px dashed var(--bd);border-radius:12px;color:var(--cy);font:600 14px system-ui;cursor:pointer}
 .ic{flex:none;background:none;border:0;font-size:18px;min-width:44px;min-height:44px;cursor:pointer}
+.seg{display:flex;gap:6px;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:4px;margin-bottom:14px}
+.seg button{flex:1;min-height:44px;border:0;border-radius:10px;background:none;color:var(--tx2);font:600 14px system-ui}
+.seg button.on{background:linear-gradient(90deg,var(--cy),var(--bl));color:#05060B}
 </style>
 </head>
 <body>
@@ -68,14 +71,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '11';
+const VERSION = '12';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, nicks:{}, editNick:null, nickMode:null, introOpen:false, nickSeen:false, tflash:'', ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, nicks:{}, editNick:null, nickMode:null, introOpen:false, nickSeen:false, trSum:[], trRows:[], scoreTab:'player', tflash:'', ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -157,16 +160,16 @@ function errorView(){
 }
 function mainView(){
   const v = S.view, nm = S.names[S.uid] ? S.names[S.uid].display_name : '';
-  const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : v === 'score' ? scoreHTML() : homeHTML();
+  const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : v === 'score' ? scoreTabsHTML() + (S.scoreTab === 'team' ? teamRatingHTML() : scoreHTML()) : homeHTML();
   const tabs = [['home','Home','🏠'],['score','Score','📝'],['team','Team' + (needsNick() ? ' •' : ''),'👥'],['settings','Settings' + (cmdOn() && missingFor(prevDay(today())).some(x => x.done < x.need) ? ' 🔴' : ''),'⚙️']];
   app.innerHTML = `<header><div><b>${esc(S.team.team_name)}</b><small>${esc(nm)} · ${isOwner() ? (S.cmd ? 'owner ⚡' : 'player') : esc(S.me.membership_role)}</small></div>${pill()}</header>
   <main>${body}</main><nav>${tabs.map(([k,l,i]) => `<button data-nav="${k}" class="${k === v ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('')}</nav>`;
-  if (v === 'score') prefillScore();
+  if (v === 'score'){ prefillScore(); prefillTeam(); }
 }
 function homeHTML(){
   const td = teamDay();
   const ov = [['Team Daily Score', td ? td.avg.toFixed(1) + ' / 50 · ' + td.n + '/4 players · ' + fmtDay(td.date) : 'No Data Available'],
-    ['Team Evaluation','No Data Available'],['Drill Completion','No Data Available'],['Scrim Performance','No Data Available']]
+    ['Team Evaluation', teamEvalText()],['Drill Completion','No Data Available'],['Scrim Performance','No Data Available']]
     .map(([t, v]) => `<div class="card ov"><small>${t}</small><b>${v}</b></div>`).join('');
   const cards = [1,2,3,4].concat(S.settings.fifth_player === true ? [5] : []).map(n => {
     const m = S.members.find(x => x.player_number === n && x.status === 'active');
@@ -256,17 +259,20 @@ async function load(){
     const pr = await run(sb.from('profiles').select('id,display_name,avatar_url').in('id', [...new Set(ms.map(x => x.user_id))]));
     const since = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     S.scores = await run(sb.from('daily_scores').select('*').eq('team_id', tid).gte('score_date', since).order('score_date', {ascending:false}));
-    const [sm, fb, st, nk] = await Promise.all([
+    const [sm, fb, st, nk, trs, trr] = await Promise.all([
       run(sb.rpc('daily_summary', {p_team:tid, p_since:since})),
       run(sb.rpc('my_feedback', {p_team:tid, p_since:since})),
       run(sb.from('team_settings').select('*').eq('team_id', tid)),
-      run(sb.from('player_nicknames').select('target_id,nickname').eq('viewer_id', S.uid)).catch(() => [])]);
+      run(sb.from('player_nicknames').select('target_id,nickname').eq('viewer_id', S.uid)).catch(() => []),
+      run(sb.rpc('team_rating_summary', {p_team:tid, p_since:since})).catch(() => []),
+      run(sb.from('team_ratings').select('*').eq('team_id', tid).gte('week_start', since).order('week_start', {ascending:false}).order('updated_at', {ascending:false})).catch(() => [])]);
     const seen = {};
     S.ov = {days: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date)).map(r => ({player_id:r.player_id, score_date:r.score_date, n:r.n, avg:r.avg_total})),
       targets: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date))
         .filter(r => r.goal && !seen[r.player_id] && (seen[r.player_id] = 1)).map(r => ({player_id:r.player_id, target:r.goal}))};
     S.feedback = fb; S.settings = Object.fromEntries(st.map(x => [x.setting_key, x.setting_value]));
     S.nicks = Object.fromEntries(nk.map(x => [x.target_id, x.nickname]));
+    S.trSum = trs; S.trRows = trr;
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
     if (S.view === 'score' && S.dirty) return;   // do not wipe a half-filled form
     mainView();
@@ -288,6 +294,7 @@ function subscribe(){
     ch.on('postgres_changes', {event:'UPDATE', schema:'public', table:'profiles'}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'daily_scores', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'team_settings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
+    ch.on('postgres_changes', {event:'*', schema:'public', table:'team_ratings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'score_pings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
   }
   S.ch = ch;
@@ -360,6 +367,16 @@ const H = {
     else await run(sb.from('player_nicknames').delete().eq('viewer_id', S.uid).eq('target_id', d.target));
     S.editNick = null; setNickDone(); S.introOpen = false; await load();
   },
+  async saveTeamRating(d){
+    const vals = {}; let filled = 0;
+    TCATS.forEach(([k]) => { if (d[k] !== '') { vals[k] = Number(d[k]); filled++; } else vals[k] = null; });
+    if (!filled) bad('Fill at least one category.');
+    const row = Object.assign({team_id:S.team.id, week_start:weekStart(today()), evaluator_id:S.uid,
+      notes_worked:d.worked.trim() || null, notes_wrong:d.wrong.trim() || null, next_focus:d.focus.trim() || null}, vals);
+    await run(sb.from('team_ratings').upsert(row, {onConflict:'team_id,week_start,evaluator_id'}));
+    S.dirty = false; S.flash = filled === 9 ? 'Team rating saved ✓' : 'Saved as Incomplete (' + filled + ' of 9 filled)';
+    await load();
+  },
   async assign(d){
     await run(sb.rpc('assign_member', {p_member:d.id, p_player:Number(d.slot), p_activate:true}));
     await load();
@@ -381,6 +398,7 @@ document.addEventListener('click', async e => {
   if (t.dataset.nick){ S.editNick = S.editNick === t.dataset.nick ? null : t.dataset.nick; return mainView(); }
   if (t.dataset.nav){ S.view = t.dataset.nav; S.introOpen = false; S.dirty = false; S.introOpen = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
+  if (t.dataset.act === 'stab'){ S.scoreTab = t.dataset.k; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'nick-open' || t.dataset.act === 'nick-cancel'){ S.nickMode = t.dataset.act === 'nick-open' ? 'all' : null; S.introOpen = false; return mainView(); }
   if (t.dataset.act === 'nick-skip'){ setNickDone(); S.introOpen = false; S.tflash = 'No problem. You can add nicknames anytime with Edit.'; return mainView(); }
   if (t.dataset.act === 'own-ask' || t.dataset.act === 'own-cancel'){ S.ownLeave = t.dataset.act === 'own-ask'; S.ownArm = false; return mainView(); }
@@ -489,7 +507,7 @@ function prefillScore(){   // load my existing rating for this date + player, if
   f.notes.value = (r && r.notes) || ''; f.goal.value = (r && r.improvement_target) || '';
   scoreTotal(f);
 }
-document.addEventListener('input', e => { if (e.target.closest('form[data-f="saveScore"]')) S.dirty = true; });
+document.addEventListener('input', e => { if (e.target.closest('form[data-f="saveScore"],form[data-f="saveTeamRating"]')) S.dirty = true; });
 document.addEventListener('change', e => {
   const f = e.target.closest('form[data-f="saveScore"]'); if (!f) return;
   if (e.target.name === 'date' || e.target.name === 'player') prefillScore(); else scoreTotal(f);
@@ -592,6 +610,53 @@ const nickKey = () => 'ff_nick_' + S.uid;
 const nickDone = () => { try{ return S.nickSeen || localStorage.getItem(nickKey()) === '1'; }catch(e){ return !!S.nickSeen; } };
 const setNickDone = () => { S.nickSeen = true; try{ localStorage.setItem(nickKey(), '1'); }catch(e){} if (sb) sb.auth.updateUser({data:{nick_intro:true}}).catch(() => {}); };
 const needsNick = () => S.members.some(m => m.status === 'active' && m.user_id !== S.uid) && !nickDone();
+
+// ---------- weekly Team Rating (9 categories x 0-10 = /90; the week is automatic: Monday to Sunday) ----------
+const TCATS = [['communication_quality','Communication Quality'],['team_coordination','Team Coordination'],['igl_decision_making','IGL Decision Making'],['rotation_management','Rotation Management'],['role_consistency','Role Consistency'],['map_adaptation','Map Adaptation'],['match_consistency','Match Consistency'],['survival_decisions','Team Survival Decisions'],['replay_improvement','Replay Improvement']];
+const weekStart = d => { const t = new Date(d + 'T00:00:00Z'); return new Date(t - ((t.getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10); };
+const band = t => t >= 81 ? 'Strong performance' : t >= 63 ? 'Improvement needed' : t >= 45 ? 'Significant weaknesses' : 'Major improvement required';
+const weakest = a => { const e = Object.entries(a || {}).filter(([, v]) => v != null).sort((x, y) => x[1] - y[1])[0]; const c = e && TCATS.find(x => x[0] === e[0]); return c ? c[1] : ''; };
+function teamEvalText(){
+  const w = S.trSum.filter(x => x.n > 0).sort((a, b) => b.week_start.localeCompare(a.week_start))[0];
+  return w ? Number(w.avg_total).toFixed(1) + ' / 90 · ' + band(Math.round(w.avg_total)) : 'No Data Available';
+}
+const scoreTabsHTML = () => `<div class="seg"><button data-act="stab" data-k="player" class="${S.scoreTab !== 'team' ? 'on' : ''}">Player Score</button><button data-act="stab" data-k="team" class="${S.scoreTab === 'team' ? 'on' : ''}">Team Rating</button></div>`;
+function teamRatingHTML(){
+  const fl = S.flash || ''; S.flash = '';
+  const nm = id => (S.names[id] || {}).display_name || 'Player';
+  const opts = '<option value="">—</option>' + Array.from({length:11}, (_, i) => `<option value="${i}">${i}</option>`).join('');
+  const weeks = S.trSum.filter(x => x.n > 0).sort((a, b) => b.week_start.localeCompare(a.week_start));
+  const wl = weeks.slice(0, S.more.trw ? 12 : 3).map((w, i) => { const pv = weeks[i + 1], d = pv ? Number(w.avg_total) - Number(pv.avg_total) : null, wk = weakest(w.avgs);
+    return `<li class="lg"><div class="fl"><b>Week of ${fmtDay(w.week_start)}</b><small>${w.n} rating${w.n > 1 ? 's' : ''} · ${band(Math.round(w.avg_total))}${wk ? ' · weakest: ' + esc(wk) : ''}</small>${w.next_focus ? `<span class="note">🎯 ${esc(w.next_focus)}</span>` : ''}</div><small>${Number(w.avg_total).toFixed(1)}/90${d === null ? '' : (d >= 0 ? ' ▲' : ' ▼') + Math.abs(d).toFixed(1)}</small></li>`; }).join('');
+  const moreB = weeks.length > 3 || S.more.trw ? `<button class="btn ghost" style="margin-top:10px" data-act="more" data-more="trw">${S.more.trw ? 'Show less' : 'More (' + (weeks.length - 3) + ' older weeks)'}</button>` : '';
+  const li = (r, who) => `<li class="lg"><div class="fl"><b>Week of ${fmtDay(r.week_start)}</b>${who ? `<small>by ${esc(nm(r.evaluator_id))}</small>` : ''}${r.notes_worked ? `<span class="note">✅ ${esc(r.notes_worked)}</span>` : ''}${r.notes_wrong ? `<span class="note">⚠️ ${esc(r.notes_wrong)}</span>` : ''}${r.next_focus ? `<span class="note">🎯 ${esc(r.next_focus)}</span>` : ''}</div><small>${r.total != null ? r.total + '/90' : 'Incomplete'}</small></li>`;
+  const mine = S.trRows.filter(r => r.evaluator_id === S.uid).slice(0, 4).map(r => li(r, false)).join('');
+  const all = S.trRows.slice(0, 10).map(r => li(r, true)).join('');
+  return `<h2>Team Rating</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}
+  <div class="card"><form data-f="saveTeamRating" novalidate>
+  <p class="mut" style="margin-bottom:12px">📅 Week of ${fmtDay(weekStart(today()))} <small>(the week is automatic)</small></p>
+  ${TCATS.map(([k, l]) => `<label>${l} (0–10)<select name="${k}">${opts}</select></label>`).join('')}
+  <label>What worked (optional)<input name="worked" maxlength="500"></label>
+  <label>What went wrong (optional)<input name="wrong" maxlength="500"></label>
+  <label>Next practice focus (optional)<input name="focus" maxlength="300"></label>
+  <p id="tr-total" class="mut" style="margin-bottom:10px">Incomplete: 0 of 9 filled</p>
+  <div class="msg" role="alert"></div><button class="btn">Save Team Rating</button></form></div>
+  <h2>📊 Team averages</h2><div class="card"><small>Average of everyone's ratings. Names are never shown here.</small><ul>${wl || '<li class="lg"><span class="mut">No team ratings yet.</span></li>'}</ul>${moreB}</div>
+  <h2>📤 Sent by you</h2><div class="card"><ul>${mine || '<li class="lg"><span class="mut">You have not rated the team yet.</span></li>'}</ul></div>
+  ${cmdOn() ? `<h2>⚡ All Team Ratings <small>(Command Mode)</small></h2><div class="card"><ul>${all || '<li class="lg"><span class="mut">No ratings yet.</span></li>'}</ul></div>` : ''}`;
+}
+function teamTotal(f){
+  const v = TCATS.map(([k]) => f[k].value), n = v.filter(x => x !== '').length, t = v.reduce((a, x) => a + (x === '' ? 0 : +x), 0);
+  document.getElementById('tr-total').textContent = n === 9 ? 'Total: ' + t + ' / 90 (' + Math.round(t / 0.9) + '%) · ' + band(t) : 'Incomplete: ' + n + ' of 9 filled';
+}
+function prefillTeam(){   // my existing rating for this week, if any
+  const f = document.querySelector('form[data-f="saveTeamRating"]'); if (!f) return;
+  const r = S.trRows.find(x => x.evaluator_id === S.uid && x.week_start === weekStart(today()));
+  TCATS.forEach(([k]) => { f[k].value = r && r[k] != null ? r[k] : ''; });
+  f.worked.value = (r && r.notes_worked) || ''; f.wrong.value = (r && r.notes_wrong) || ''; f.focus.value = (r && r.next_focus) || '';
+  teamTotal(f);
+}
+document.addEventListener('change', e => { const f = e.target.closest('form[data-f="saveTeamRating"]'); if (f) teamTotal(f); });
 
 // ---------- start ----------
 async function boot(){
