@@ -17,9 +17,14 @@ body{min-height:100dvh;background:radial-gradient(120% 55% at 50% 0,var(--pur),v
 label{display:block;color:var(--tx2);font-size:14px;margin-bottom:12px}
 input,select{width:100%;min-height:48px;margin-top:6px;padding:10px 12px;background:var(--bg2);color:var(--tx);border:1px solid var(--bd);border-radius:12px;font:inherit}
 input:focus,select:focus{outline:2px solid var(--cy);outline-offset:1px}
-.btn{width:100%;min-height:48px;border:0;border-radius:12px;background:linear-gradient(90deg,var(--cy),var(--bl));color:#05060B;font:700 16px system-ui;cursor:pointer}
-.btn:disabled{opacity:.5}
+:focus-visible{outline:2px solid var(--cy);outline-offset:3px}
+input[type="checkbox"],input[type="radio"]{width:auto;min-height:0;margin:0 8px 0 0;padding:0;accent-color:var(--cy)}
+select option{background:var(--bg2);color:var(--tx)}
+.btn{width:100%;min-height:48px;border:0;border-radius:12px;background:linear-gradient(90deg,var(--cy),var(--bl));color:#05060B;font:700 16px system-ui;cursor:pointer;transition:filter .15s,transform .15s}
+.btn:active{transform:translateY(1px);filter:brightness(.95)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.ghost{background:transparent;color:var(--cy);border:1px solid var(--bd)}
+.btn.danger{background:linear-gradient(90deg,#FF6B6B,#D83B68);color:#16050A}
 .btn.sm{width:auto;padding:0 16px}
 .links{display:flex;justify-content:space-between;margin-top:14px}
 a{color:var(--cy);cursor:pointer;padding:8px 0}
@@ -144,7 +149,7 @@ function onboardView(){
   <p class="mut" style="margin-bottom:10px">Timezone: ${esc(TZ)}</p>
   <div class="msg" role="alert"></div><button class="btn">Create Team</button></form></div>
   <div class="card"><h3>Join Existing Team</h3><form data-f="joinTeam" novalidate>
-  <label>Your name in this team (only if asked)<input name="name" maxlength="40" autocomplete="nickname"></label>
+  <label>Team display name (optional)<input name="name" maxlength="40" autocomplete="nickname"></label>
   <label>Join code from your team owner<input name="code" maxlength="12" autocapitalize="characters" autocomplete="off"></label>
   <div class="msg" role="alert"></div><button class="btn ghost">Join Team</button></form></div>
   <div class="links"><a data-act="logout">Log out</a></div></div>`;
