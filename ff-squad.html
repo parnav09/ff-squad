@@ -8,6 +8,23 @@
 <style>
 :root{--bg:#05060B;--bg2:#080B17;--pur:#24104A;--cy:#42E8FF;--bl:#528BFF;--vi:#9B6CFF;--tx:#EDF4FF;--tx2:#8FA2C3;--bd:#1D2A45;--ok:#3DDC97;--er:#FF6B6B;--wa:#FFC857}
 *{box-sizing:border-box;margin:0;padding:0}
+/* App-wide motion system: page transitions, card entrance, and tactile controls */
+:root{--motion-fast:160ms;--motion-mid:240ms;--motion-ease:cubic-bezier(.22,.75,.25,1)}
+button,a,.card,.pill,.seg button,.row select,.drill-item{transition:color var(--motion-fast) ease,background-color var(--motion-fast) ease,border-color var(--motion-fast) ease,box-shadow var(--motion-fast) ease,transform var(--motion-fast) var(--motion-ease),opacity var(--motion-fast) ease}
+main.page-enter{animation:page-enter 280ms var(--motion-ease) both}
+@keyframes page-enter{from{opacity:0;transform:translate3d(0,9px,0)}to{opacity:1;transform:translate3d(0,0,0)}}
+main.page-enter .card{animation:card-enter 320ms var(--motion-ease) both}
+main.page-enter .card:nth-of-type(2){animation-delay:25ms}
+main.page-enter .card:nth-of-type(3){animation-delay:45ms}
+main.page-enter .card:nth-of-type(4){animation-delay:65ms}
+@keyframes card-enter{from{opacity:.45;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+nav button{transition:color 180ms ease,background 180ms ease,transform 180ms var(--motion-ease)}
+nav button:active{transform:scale(.96)}
+.card{transition:border-color 180ms ease,background 180ms ease,box-shadow 180ms ease}
+.btn:hover:not(:disabled){filter:brightness(1.06)}
+.seg button:active{transform:scale(.98)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+
 html{-webkit-text-size-adjust:100%}
 body{min-height:100dvh;background:radial-gradient(120% 55% at 50% 0,var(--pur),var(--bg) 62%) no-repeat,var(--bg);color:var(--tx);font:16px/1.45 system-ui,-apple-system,Roboto,sans-serif;overflow-x:hidden;padding-top:env(safe-area-inset-top)}
 .wrap{max-width:480px;margin:0 auto;padding:28px 16px}
@@ -100,7 +117,7 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '18';
+const VERSION = '19';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
@@ -443,7 +460,7 @@ document.addEventListener('click', async e => {
   if (t.dataset.go) return authView(t.dataset.go);
   if (t.dataset.more){ S.more[t.dataset.more] = !S.more[t.dataset.more]; return mainView(); }
   if (t.dataset.nick){ S.editNick = S.editNick === t.dataset.nick ? null : t.dataset.nick; return mainView(); }
-  if (t.dataset.nav){ S.view = t.dataset.nav; S.introOpen = false; S.dirty = false; S.introOpen = false; return mainView(); }
+  if (t.dataset.nav){ S.view = t.dataset.nav; S.introOpen = false; S.dirty = false; mainView(); const m=document.querySelector('main'); if(m){m.classList.remove('page-enter'); void m.offsetWidth; m.classList.add('page-enter');} return; }
   if (t.dataset.act === 'reload') return load();
   if (t.dataset.act === 'ttab'){ S.trainTab = t.dataset.k; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'tstart'){ TM = {start:Date.now(), pausedMs:0}; tmSave(); return mainView(); }
