@@ -104,6 +104,11 @@ li.lg{align-items:flex-start}
 .seg button{flex:1;min-height:44px;border:0;border-radius:10px;background:none;color:var(--tx2);font:600 14px system-ui;cursor:pointer;transition:background 220ms ease,color 180ms ease,transform 180ms var(--motion-ease)}
 .seg button:not(.on):hover{background:rgba(255,255,255,.045);color:var(--tx)}
 .seg button.on{background:linear-gradient(90deg,var(--cy),var(--bl));color:#05060B;transition:background 220ms ease,color 180ms ease}
+/* Explicit segmented-control reset: prevent native/default button rendering */
+.seg>button{appearance:none!important;-webkit-appearance:none!important;display:flex!important;align-items:center!important;justify-content:center!important;flex:1 1 0!important;min-width:0!important;min-height:44px!important;margin:0!important;padding:10px 12px!important;border:0!important;border-radius:10px!important;background:transparent!important;color:var(--tx2)!important;font:600 14px/1.2 system-ui,-apple-system,Roboto,sans-serif!important;text-align:center!important;box-shadow:none!important;text-decoration:none!important}
+.seg>button.on{background:linear-gradient(100deg,var(--cy),var(--bl))!important;color:#05060B!important}
+.seg>button:not(.on):active{background:rgba(82,139,255,.10)!important}
+
 .bar{height:8px;border-radius:99px;background:var(--bg2);overflow:hidden}
 .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--cy),var(--bl))}
 </style>
@@ -118,7 +123,7 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '22';
+const VERSION = '23';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
