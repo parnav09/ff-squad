@@ -93,7 +93,7 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '16';
+const VERSION = '17';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
@@ -764,7 +764,7 @@ function drillsHTML(){
   let mine = '<p class="mut">Drills are defined for P1 to P4. You have no main slot, so there are none for you.</p>';
   if (D){
     const rows = D.list.map(([name, cat, mins], i) => { const r = S.drills.find(x => x.player_id === S.uid && x.drill_date === t && x.drill_name === name) || {};
-      return `<div class="drill-item"><label class="drill-item" style="border:0;background:transparent;margin:0;padding:0;flex:1;cursor:pointer"><input class="drill-check" type="checkbox" name="d${i}" ${r.completed ? 'checked' : ''} aria-label="Mark ${esc(name)} complete"><span class="drill-copy"><b>${esc(name)}</b><small>${mins} min · ${esc(cat)}</small></span></label></div>
+      return `<label class="drill-item"><input class="drill-check" type="checkbox" name="d${i}" ${r.completed ? 'checked' : ''} aria-label="Mark ${esc(name)} complete"><span class="drill-copy"><b>${esc(name)}</b><small>${mins} min · ${esc(cat)}</small></span></label>
         <div class="row" style="border:0;padding:8px 0 0"><select name="s${i}" style="flex:0 0 96px"><option value="">Score</option>${Array.from({length:11}, (_, k) => `<option value="${k}" ${r.score === k ? 'selected' : ''}>${k}</option>`).join('')}</select><input name="n${i}" maxlength="300" placeholder="Note (optional)" value="${esc(r.notes || '')}" style="flex:1 1 140px;margin:0"></div>`; }).join('');
     mine = `<small>🎯 Focus: ${esc(D.focus)} · ${D.list.reduce((a, x) => a + x[2], 0)} min</small><form data-f="saveDrills" novalidate style="margin-top:8px">${rows}<div class="msg" role="alert"></div><button class="btn">Save drills</button></form>`;
   }
