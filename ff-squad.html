@@ -59,6 +59,8 @@ li.lg{align-items:flex-start}
 .seg{display:flex;gap:6px;background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:4px;margin-bottom:14px}
 .seg button{flex:1;min-height:44px;border:0;border-radius:10px;background:none;color:var(--tx2);font:600 14px system-ui}
 .seg button.on{background:linear-gradient(90deg,var(--cy),var(--bl));color:#05060B}
+.bar{height:8px;border-radius:99px;background:var(--bg2);overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--cy),var(--bl))}
 </style>
 </head>
 <body>
@@ -71,14 +73,14 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '12';
+const VERSION = '13';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 const LBL = {ok:'Synced',connecting:'Connecting…',off:'Offline',err:'Sync error'};
 const app = document.getElementById('app');
-const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, nicks:{}, editNick:null, nickMode:null, introOpen:false, nickSeen:false, trSum:[], trRows:[], scoreTab:'player', tflash:'', ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
+const S = {view:'home', sync:'off', uid:null, me:null, team:null, members:[], names:{}, scores:[], feedback:[], settings:{}, cmd:false, more:{}, trainTab:'sched', trainEdit:false, drills:[], tlog:[], nicks:{}, editNick:null, nickMode:null, introOpen:false, nickSeen:false, trSum:[], trRows:[], scoreTab:'player', tflash:'', ownLeave:false, ownArm:false, leaveArm:false, dirty:false, recovery:false, ch:null};
 let sb = null, chKey = '', tm = 0;
 // Read the reset-link result from the URL before Supabase clears it
 const URLP = new URLSearchParams(location.hash.slice(1));
@@ -160,8 +162,8 @@ function errorView(){
 }
 function mainView(){
   const v = S.view, nm = S.names[S.uid] ? S.names[S.uid].display_name : '';
-  const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : v === 'score' ? scoreTabsHTML() + (S.scoreTab === 'team' ? teamRatingHTML() : scoreHTML()) : homeHTML();
-  const tabs = [['home','Home','🏠'],['score','Score','📝'],['team','Team' + (needsNick() ? ' •' : ''),'👥'],['settings','Settings' + (cmdOn() && missingFor(prevDay(today())).some(x => x.done < x.need) ? ' 🔴' : ''),'⚙️']];
+  const body = v === 'team' ? teamHTML() : v === 'settings' ? settingsHTML() : v === 'train' ? trainHTML() : v === 'score' ? scoreTabsHTML() + (S.scoreTab === 'team' ? teamRatingHTML() : scoreHTML()) : homeHTML();
+  const tabs = [['home','Home','🏠'],['train','Train','🏋️'],['score','Score','📝'],['team','Team' + (needsNick() ? ' •' : ''),'👥'],['settings','Settings' + (cmdOn() && missingFor(prevDay(today())).some(x => x.done < x.need) ? ' 🔴' : ''),'⚙️']];
   app.innerHTML = `<header><div><b>${esc(S.team.team_name)}</b><small>${esc(nm)} · ${isOwner() ? (S.cmd ? 'owner ⚡' : 'player') : esc(S.me.membership_role)}</small></div>${pill()}</header>
   <main>${body}</main><nav>${tabs.map(([k,l,i]) => `<button data-nav="${k}" class="${k === v ? 'on' : ''}"><span>${i}</span>${l}</button>`).join('')}</nav>`;
   if (v === 'score'){ prefillScore(); prefillTeam(); }
@@ -169,7 +171,7 @@ function mainView(){
 function homeHTML(){
   const td = teamDay();
   const ov = [['Team Daily Score', td ? td.avg.toFixed(1) + ' / 50 · ' + td.n + '/4 players · ' + fmtDay(td.date) : 'No Data Available'],
-    ['Team Evaluation', teamEvalText()],['Drill Completion','No Data Available'],['Scrim Performance','No Data Available']]
+    ['Team Evaluation', teamEvalText()],['Drill Completion', drillText()],['Scrim Performance','No Data Available']]
     .map(([t, v]) => `<div class="card ov"><small>${t}</small><b>${v}</b></div>`).join('');
   const cards = [1,2,3,4].concat(S.settings.fifth_player === true ? [5] : []).map(n => {
     const m = S.members.find(x => x.player_number === n && x.status === 'active');
@@ -245,7 +247,7 @@ async function load(){
     S.uid = session.user.id; S.email = session.user.email;
     S.nickSeen = !!(session.user.user_metadata || {}).nick_intro;   // remembered on the account, so every phone knows
     if (S.recovery) return recoverView();
-    const [p, m] = await Promise.all([
+    const [p, m, dr, tl] = await Promise.all([
       run(sb.from('profiles').select('*').eq('id', S.uid).maybeSingle()),
       run(sb.from('team_members').select('*').eq('user_id', S.uid))]);
     S.me = m.find(x => x.status === 'active') || m[0] || null; S.team = null;
@@ -265,7 +267,9 @@ async function load(){
       run(sb.from('team_settings').select('*').eq('team_id', tid)),
       run(sb.from('player_nicknames').select('target_id,nickname').eq('viewer_id', S.uid)).catch(() => []),
       run(sb.rpc('team_rating_summary', {p_team:tid, p_since:since})).catch(() => []),
-      run(sb.from('team_ratings').select('*').eq('team_id', tid).gte('week_start', since).order('week_start', {ascending:false}).order('updated_at', {ascending:false})).catch(() => [])]);
+      run(sb.from('team_ratings').select('*').eq('team_id', tid).gte('week_start', since).order('week_start', {ascending:false}).order('updated_at', {ascending:false})).catch(() => []),
+      run(sb.from('daily_drills').select('*').eq('team_id', tid).gte('drill_date', since)).catch(() => []),
+      run(sb.from('training_log').select('*').eq('team_id', tid).gte('log_date', since)).catch(() => [])]);
     const seen = {};
     S.ov = {days: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date)).map(r => ({player_id:r.player_id, score_date:r.score_date, n:r.n, avg:r.avg_total})),
       targets: sm.slice().sort((a, b) => b.score_date.localeCompare(a.score_date))
@@ -274,7 +278,8 @@ async function load(){
     S.nicks = Object.fromEntries(nk.map(x => [x.target_id, x.nickname]));
     S.trSum = trs; S.trRows = trr;
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
-    if (S.view === 'score' && S.dirty) return;   // do not wipe a half-filled form
+    S.drills = dr; S.tlog = tl;
+    if ((S.view === 'score' || S.view === 'train') && S.dirty) return;   // do not wipe a half-filled form
     mainView();
     purgeOld();
   }catch(e){ console.error(e); errorView(); }
@@ -294,6 +299,8 @@ function subscribe(){
     ch.on('postgres_changes', {event:'UPDATE', schema:'public', table:'profiles'}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'daily_scores', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'team_settings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
+    ch.on('postgres_changes', {event:'*', schema:'public', table:'daily_drills', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
+    ch.on('postgres_changes', {event:'*', schema:'public', table:'training_log', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'team_ratings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
     ch.on('postgres_changes', {event:'*', schema:'public', table:'score_pings', filter:'team_id=eq.' + S.me.team_id}, refreshSoon);
   }
@@ -377,6 +384,19 @@ const H = {
     S.dirty = false; S.flash = filled === 9 ? 'Team rating saved ✓' : 'Saved as Incomplete (' + filled + ' of 9 filled)';
     await load();
   },
+  async saveDrills(d){
+    const me = S.members.find(m => m.user_id === S.uid), D = me && DRILLS[me.player_number];
+    if (!D) bad('There are no drills for your slot.');
+    const rows = D.list.map(([name, cat, mins], i) => ({team_id:S.team.id, drill_date:today(), player_id:S.uid, drill_name:name, category:cat, minutes:mins,
+      completed:d['d' + i] === 'on', score:d['s' + i] === '' ? null : Number(d['s' + i]), evaluator:S.uid, notes:(d['n' + i] || '').trim() || null}));
+    await run(sb.from('daily_drills').upsert(rows, {onConflict:'team_id,drill_date,player_id,drill_name'}));
+    S.dirty = false; S.flash = 'Drills saved ✓ (' + rows.filter(r => r.completed).length + ' of ' + rows.length + ' done)'; await load();
+  },
+  async saveSched(d){
+    const arr = BASE.map((b, i) => Math.max(1, Math.min(240, parseInt(d['m' + i], 10) || b[1])));
+    await run(sb.from('team_settings').upsert({team_id:S.team.id, setting_key:'schedule', setting_value:arr}, {onConflict:'team_id,setting_key'}));
+    S.trainEdit = false; await load();
+  },
   async assign(d){
     await run(sb.rpc('assign_member', {p_member:d.id, p_player:Number(d.slot), p_activate:true}));
     await load();
@@ -398,6 +418,24 @@ document.addEventListener('click', async e => {
   if (t.dataset.nick){ S.editNick = S.editNick === t.dataset.nick ? null : t.dataset.nick; return mainView(); }
   if (t.dataset.nav){ S.view = t.dataset.nav; S.introOpen = false; S.dirty = false; S.introOpen = false; return mainView(); }
   if (t.dataset.act === 'reload') return load();
+  if (t.dataset.act === 'ttab'){ S.trainTab = t.dataset.k; S.dirty = false; return mainView(); }
+  if (t.dataset.act === 'tstart'){ TM = {start:Date.now(), pausedMs:0}; tmSave(); return mainView(); }
+  if (t.dataset.act === 'tpause'){ tmLoad(); TM.pausedAt = Date.now(); tmSave(); return mainView(); }
+  if (t.dataset.act === 'tresume'){ tmLoad(); TM.pausedMs = (TM.pausedMs || 0) + (Date.now() - TM.pausedAt); delete TM.pausedAt; tmSave(); return mainView(); }
+  if (t.dataset.act === 'tedit'){ S.trainEdit = !S.trainEdit; return mainView(); }
+  if (t.dataset.act === 'treset'){
+    try{ await run(sb.from('team_settings').delete().eq('team_id', S.team.id).eq('setting_key', 'schedule')); S.trainEdit = false; await load(); }catch(err){ console.error(err); alert(friendly(err)); }
+    return;
+  }
+  if (t.dataset.act === 'tfinish'){
+    try{ await run(sb.from('training_log').upsert(sched().map((x, i) => ({team_id:S.team.id, log_date:today(), activity:actKey(i, x[0]), done:true, updated_by:S.uid})), {onConflict:'team_id,log_date,activity'})); TM = {}; tmSave(); await load(); }catch(err){ console.error(err); alert(friendly(err)); }
+    return;
+  }
+  if (t.dataset.act === 'tdo'){
+    const i = Number(t.dataset.k), key = actKey(i, sched()[i][0]), cur = S.tlog.some(r => r.log_date === today() && r.activity === key && r.done);
+    try{ await run(sb.from('training_log').upsert({team_id:S.team.id, log_date:today(), activity:key, done:!cur, updated_by:S.uid}, {onConflict:'team_id,log_date,activity'})); await load(); }catch(err){ console.error(err); alert(friendly(err)); }
+    return;
+  }
   if (t.dataset.act === 'stab'){ S.scoreTab = t.dataset.k; S.dirty = false; return mainView(); }
   if (t.dataset.act === 'nick-open' || t.dataset.act === 'nick-cancel'){ S.nickMode = t.dataset.act === 'nick-open' ? 'all' : null; S.introOpen = false; return mainView(); }
   if (t.dataset.act === 'nick-skip'){ setNickDone(); S.introOpen = false; S.tflash = 'No problem. You can add nicknames anytime with Edit.'; return mainView(); }
@@ -507,7 +545,7 @@ function prefillScore(){   // load my existing rating for this date + player, if
   f.notes.value = (r && r.notes) || ''; f.goal.value = (r && r.improvement_target) || '';
   scoreTotal(f);
 }
-document.addEventListener('input', e => { if (e.target.closest('form[data-f="saveScore"],form[data-f="saveTeamRating"]')) S.dirty = true; });
+document.addEventListener('input', e => { if (e.target.closest('form[data-f="saveScore"],form[data-f="saveTeamRating"],form[data-f="saveDrills"]')) S.dirty = true; });
 document.addEventListener('change', e => {
   const f = e.target.closest('form[data-f="saveScore"]'); if (!f) return;
   if (e.target.name === 'date' || e.target.name === 'player') prefillScore(); else scoreTotal(f);
@@ -657,6 +695,73 @@ function prefillTeam(){   // my existing rating for this week, if any
   teamTotal(f);
 }
 document.addEventListener('change', e => { const f = e.target.closest('form[data-f="saveTeamRating"]'); if (f) teamTotal(f); });
+
+// ---------- Daily Training: schedule (total is calculated), optional timer, per-player drills ----------
+const BASE = [['Warm-up',15],['Individual Drills',30],['Communication Drills',20],['Map / Rotation Planning',20],['Scrim 1',120],['Break',15],['Quick Review',15],['Scrim 2',80],['Break',15],['Replay Analysis',30],['Final Evaluation',15]];
+const DRILLS = {
+  1:{focus:'Controlled aggression and coordinated entry', list:[['Contact Call','Communication',5],['Entry Decision','Decision Making',5],['P2 Synchronization','Coordination',5],['Pressure Control','Role Execution',5],['Replay Review','Review',5]]},
+  2:{focus:'Correct support timing and coordinated follow-up', list:[['P1 Tracking','Coordination',5],['Support Timing','Role Execution',5],['Confirmation Calls','Communication',5],['Backup Decision','Decision Making',5],['Replay Review','Review',5]]},
+  3:{focus:'Information accuracy without losing team connection', list:[['Map Awareness','Map Awareness',5],['Flank Awareness','Map Awareness',5],['Information Calls','Communication',5],['Team Connection','Coordination',5],['Replay Review','Review',5]]},
+  4:{focus:'Clear, timely decisions based on reliable information', list:[['Map Planning','Map Awareness',5],['IGL Calls','Communication',5],['Information Processing','Decision Making',5],['Decision Simulation','Decision Making',10],['Replay Review','Review',5]]}
+};
+const sched = () => { const s = S.settings.schedule; return BASE.map((b, i) => [b[0], Array.isArray(s) && s[i] > 0 ? Number(s[i]) : b[1]]); };
+const actKey = (i, n) => String(i).padStart(2, '0') + ' ' + n;
+const hm = ms => new Date(ms).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+const fmtDur = ms => { const m = Math.floor(ms / 6e4); return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm'; };
+let TM = {};   // optional session timer: lives on this phone only, never forced
+const tmKey = () => 'ff_tmr_' + S.uid + '_' + today();
+const tmLoad = () => { try{ TM = JSON.parse(localStorage.getItem(tmKey())) || {}; }catch(e){ TM = {}; } };
+const tmSave = () => { try{ localStorage.setItem(tmKey(), JSON.stringify(TM)); }catch(e){} };
+const tmEl = () => TM.start ? Math.max(0, (TM.pausedAt || Date.now()) - TM.start - (TM.pausedMs || 0)) : 0;
+const tmTotal = () => sched().reduce((a, x) => a + x[1], 0) * 6e4;
+setInterval(() => { const e = document.getElementById('tm-el'); if (!e) return; e.textContent = fmtDur(tmEl()) + ' / ' + fmtDur(tmTotal());
+  const b = document.getElementById('tm-bar'); if (b) b.style.width = Math.min(100, tmEl() / tmTotal() * 100) + '%'; }, 1000);
+function trainHTML(){
+  tmLoad();
+  const seg = `<div class="seg"><button data-act="ttab" data-k="sched" class="${S.trainTab !== 'drills' ? 'on' : ''}">Schedule</button><button data-act="ttab" data-k="drills" class="${S.trainTab === 'drills' ? 'on' : ''}">Drills</button></div>`;
+  return seg + (S.trainTab === 'drills' ? drillsHTML() : schedHTML());
+}
+function schedHTML(){
+  const t = today(), list = sched(), total = list.reduce((a, x) => a + x[1], 0);
+  const done = new Set(S.tlog.filter(r => r.log_date === t && r.done).map(r => r.activity));
+  let cum = 0;
+  const rows = list.map(([n, m], i) => { const k = actKey(i, n), st = TM.start ? TM.start + (TM.pausedMs || 0) + cum * 6e4 : 0; cum += m;
+    return `<li class="lg"><div class="fl"><b>${esc(n)}</b><small>${m} min${TM.start ? ' · ' + hm(st) + '–' + hm(st + m * 6e4) : ''}</small></div><button class="ic" data-act="tdo" data-k="${i}" aria-label="Toggle done">${done.has(k) ? '✅' : '⬜'}</button></li>`; }).join('');
+  const nd = list.filter(([n], i) => done.has(actKey(i, n))).length;
+  const ctl = !TM.start ? '<button class="btn" style="margin-top:10px" data-act="tstart">▶ Start session (optional timer)</button>'
+    : `<p class="msg ok" style="margin:10px 0"><span id="tm-el">${fmtDur(tmEl())} / ${fmtDur(tmTotal())}</span>${TM.pausedAt ? ' · paused' : ''}</p><div class="bar"><i id="tm-bar" style="width:${Math.min(100, tmEl() / tmTotal() * 100)}%"></i></div>
+       <button class="btn ghost" data-act="${TM.pausedAt ? 'tresume' : 'tpause'}" style="margin-top:10px">${TM.pausedAt ? '▶ Resume' : '⏸ Pause'}</button>
+       <button class="btn ghost" data-act="tfinish" style="margin-top:10px">✔ Mark session complete</button>`;
+  const edit = !cmdOn() ? '' : S.trainEdit
+    ? `<form data-f="saveSched" novalidate style="margin-top:12px">${list.map(([n, m], i) => `<label>${esc(n)} (minutes)<input name="m${i}" type="number" min="1" max="240" inputmode="numeric" value="${m}"></label>`).join('')}<div class="msg" role="alert"></div><button class="btn">Save durations</button></form><button class="btn ghost" style="margin-top:10px" data-act="treset">Reset to baseline</button><button class="btn ghost" style="margin-top:10px" data-act="tedit">Cancel</button>`
+    : '<button class="btn ghost" style="margin-top:12px" data-act="tedit">⚡ Edit durations</button>';
+  return `<h2>Daily Training</h2><div class="card"><small>${nd} of ${list.length} done · total ${total} min (${Math.floor(total / 60)}h ${total % 60}m)</small>${ctl}</div><div class="card"><ul>${rows}</ul>${edit}</div>`;
+}
+function drillsHTML(){
+  const fl = S.flash || ''; S.flash = '';
+  const t = today(), nm = id => (S.names[id] || {}).display_name || 'Player';
+  const me = S.members.find(m => m.user_id === S.uid), D = me && DRILLS[me.player_number];
+  let mine = '<p class="mut">Drills are defined for P1 to P4. You have no main slot, so there are none for you.</p>';
+  if (D){
+    const rows = D.list.map(([name, cat, mins], i) => { const r = S.drills.find(x => x.player_id === S.uid && x.drill_date === t && x.drill_name === name) || {};
+      return `<div class="row" style="display:block"><label style="margin:0"><span class="tg"><input type="checkbox" name="d${i}" ${r.completed ? 'checked' : ''} style="width:24px;min-height:24px;margin:0;flex:none"><span><b style="color:var(--tx)">${esc(name)}</b><br><small>${mins} min · ${esc(cat)}</small></span></span></label>
+        <div class="row" style="border:0;padding:8px 0 0"><select name="s${i}" style="flex:0 0 96px"><option value="">Score</option>${Array.from({length:11}, (_, k) => `<option value="${k}" ${r.score === k ? 'selected' : ''}>${k}</option>`).join('')}</select><input name="n${i}" maxlength="300" placeholder="Note (optional)" value="${esc(r.notes || '')}" style="flex:1 1 140px;margin:0"></div></div>`; }).join('');
+    mine = `<small>🎯 Focus: ${esc(D.focus)} · ${D.list.reduce((a, x) => a + x[2], 0)} min</small><form data-f="saveDrills" novalidate style="margin-top:8px">${rows}<div class="msg" role="alert"></div><button class="btn">Save drills</button></form>`;
+  }
+  let d7 = t; for (let i = 0; i < 6; i++) d7 = prevDay(d7);
+  const wk = S.drills.filter(r => r.player_id === S.uid && r.drill_date >= d7), sc = wk.filter(r => r.score != null);
+  const hist = wk.length ? `${wk.filter(r => r.completed).length} drills done in the last 7 days${sc.length ? ' · average score ' + (sc.reduce((a, r) => a + r.score, 0) / sc.length).toFixed(1) : ''}` : 'Nothing saved in the last 7 days yet.';
+  const squad = S.members.filter(m => m.status === 'active' && DRILLS[m.player_number]).sort((a, b) => a.player_number - b.player_number)
+    .map(m => `<li><span>P${m.player_number} · ${esc(nm(m.user_id))}</span><small>${S.drills.filter(r => r.player_id === m.user_id && r.drill_date === t && r.completed).length}/${DRILLS[m.player_number].list.length}</small></li>`).join('');
+  return `<h2>My Drills</h2>${fl ? `<p class="msg ok">${esc(fl)}</p>` : ''}<div class="card">${mine}</div>
+  <div class="card"><h3>📈 Your last 7 days</h3><small>${hist}</small></div>
+  <h2>Squad today</h2><div class="card"><ul>${squad || '<li><span class="mut">No players yet.</span></li>'}</ul></div>`;
+}
+function drillText(){
+  const t = today(), ms = S.members.filter(m => m.status === 'active' && DRILLS[m.player_number]); if (!ms.length) return 'No Data Available';
+  const need = ms.reduce((a, m) => a + DRILLS[m.player_number].list.length, 0), d = S.drills.filter(r => r.drill_date === t && r.completed && ms.some(m => m.user_id === r.player_id)).length;
+  return d ? Math.round(d / need * 100) + '% · ' + d + '/' + need + ' drills today' : 'No Data Available';
+}
 
 // ---------- start ----------
 async function boot(){
