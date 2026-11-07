@@ -73,7 +73,7 @@ const CONFIG = {
   SUPABASE_ANON_KEY: 'sb_publishable_H10l8gZedy2FwkSP4XMyRQ_nbamdPES'
 };
 // ===================================================================================
-const VERSION = '13';
+const VERSION = '14';
 const ROLES = {1:'Primary Rusher',2:'Secondary Rusher',3:'Third Rusher / Flanker',4:'Sniper / IGL',5:'Substitute'};
 const CATS = ['communication','coordination','decision_making','role_execution','map_awareness'];
 const CAT_LBL = {communication:'Communication',coordination:'Coordination',decision_making:'Decision Making',role_execution:'Role Execution',map_awareness:'Map Awareness'};
@@ -247,7 +247,7 @@ async function load(){
     S.uid = session.user.id; S.email = session.user.email;
     S.nickSeen = !!(session.user.user_metadata || {}).nick_intro;   // remembered on the account, so every phone knows
     if (S.recovery) return recoverView();
-    const [p, m, dr, tl] = await Promise.all([
+    const [p, m] = await Promise.all([
       run(sb.from('profiles').select('*').eq('id', S.uid).maybeSingle()),
       run(sb.from('team_members').select('*').eq('user_id', S.uid))]);
     S.me = m.find(x => x.status === 'active') || m[0] || null; S.team = null;
@@ -261,7 +261,7 @@ async function load(){
     const pr = await run(sb.from('profiles').select('id,display_name,avatar_url').in('id', [...new Set(ms.map(x => x.user_id))]));
     const since = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);
     S.scores = await run(sb.from('daily_scores').select('*').eq('team_id', tid).gte('score_date', since).order('score_date', {ascending:false}));
-    const [sm, fb, st, nk, trs, trr] = await Promise.all([
+    const [sm, fb, st, nk, trs, trr, dr, tl] = await Promise.all([
       run(sb.rpc('daily_summary', {p_team:tid, p_since:since})),
       run(sb.rpc('my_feedback', {p_team:tid, p_since:since})),
       run(sb.from('team_settings').select('*').eq('team_id', tid)),
@@ -278,7 +278,7 @@ async function load(){
     S.nicks = Object.fromEntries(nk.map(x => [x.target_id, x.nickname]));
     S.trSum = trs; S.trRows = trr;
     S.team = t; S.members = ms; S.names = Object.fromEntries(pr.map(x => [x.id, x]));
-    S.drills = dr; S.tlog = tl;
+    S.drills = dr || []; S.tlog = tl || [];
     if ((S.view === 'score' || S.view === 'train') && S.dirty) return;   // do not wipe a half-filled form
     mainView();
     purgeOld();
